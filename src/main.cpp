@@ -25,7 +25,7 @@ String MQTT_END_TOPIC = "";     // Full topic set in setup
 String MQTT_STATUS_TOPIC = "";  // Full topic set in setup
 
 // BLE Target Configuration
-const char* BLE_TARGET_MAC = "44:00:00:0A:91:40"; // <<< VERIFY/SET YOUR DISPLAY MAC
+// const char* BLE_TARGET_MAC = "44:00:00:0A:91:40"; // <<< REMOVED - Now dynamic
 const char* BLE_SERVICE_UUID_STR = "00001523-1212-efde-1523-785feabcd123"; // <<< VERIFY THIS SERVICE UUID
 const char* BLE_CHARACTERISTIC_UUID_STR = "00001525-1212-efde-1523-785feabcd123";
 
@@ -33,32 +33,39 @@ const char* BLE_CHARACTERISTIC_UUID_STR = "00001525-1212-efde-1523-785feabcd123"
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 
-NimBLEAddress targetAddress(std::string(BLE_TARGET_MAC), BLE_ADDR_PUBLIC);
+// NimBLEAddress targetAddress(std::string(BLE_TARGET_MAC), BLE_ADDR_PUBLIC); // REMOVED - Now dynamic
 NimBLEUUID serviceUUID(BLE_SERVICE_UUID_STR);
 NimBLEUUID characteristicUUID(BLE_CHARACTERISTIC_UUID_STR);
+
+// Dynamic Target State
+std::string currentTargetMac = ""; // MAC address of the device currently being handled (e.g., "AA:BB:CC:DD:EE:FF")
+NimBLEAddress currentTargetAddress; // BLE address object for the current target
 
 NimBLEClient* pClient = nullptr;
 NimBLERemoteCharacteristic* pRemoteCharacteristic = nullptr;
 bool bleConnected = false;
 bool transferInProgress = false; // Flag to manage connection state and packet queuing
 unsigned long lastActionTime = 0; // For inactivity timeout
-const unsigned long TRANSFER_TIMEOUT_MS = 30000; // Timeout for transfer inactivity (30s)
+// const unsigned long TRANSFER_TIMEOUT_MS = 30000; // REMOVED - Replaced by retry mechanism
+const int MAX_BLE_CONNECT_RETRIES = 4; // Max attempts to connect before failing transfer
 bool endCommandReceived = false; // Flag to indicate END command was received
+bool transferAborted = false; // Flag to signal immediate stop within loop iteration
 
 // Packet Queue
 std::queue<std::vector<uint8_t>> packetQueue;
 int packetsReceivedCount = 0;
 int packetsWrittenCount = 0;
+int bleConnectRetries = 0; // Counter for BLE connection attempts
 
 // --- Function Declarations ---
 void connectWiFi();
 void connectMQTT();
 void mqttCallback(char* topic, byte* payload, unsigned int length);
-bool connectBLE();
+bool connectBLE(const std::string& targetMac); // Add targetMac param
 void disconnectBLE(bool force = false);
 bool writePacketToBLE(const std::vector<uint8_t>& packetData);
 std::vector<uint8_t> hexStringToBytes(const std::string& hex);
-void publishStatus(const char* status);
+void publishStatus(const char* status, const std::string& targetMac = ""); // Add targetMac param with default
 
 // --- Setup Function ---
 void setup() {
@@ -70,31 +77,33 @@ void setup() {
     String mac = WiFi.macAddress();
     mac.replace(":", "");
     MQTT_CLIENT_ID += mac;
-    String macTopicPart = BLE_TARGET_MAC; // Use target MAC for topic clarity
-    macTopicPart.replace(":", "");
-    MQTT_START_TOPIC = MQTT_COMMAND_TOPIC_BASE + macTopicPart + "/command/start";
-    MQTT_PACKET_TOPIC = MQTT_COMMAND_TOPIC_BASE + macTopicPart + "/command/packet";
-    MQTT_END_TOPIC = MQTT_COMMAND_TOPIC_BASE + macTopicPart + "/command/end";
-    MQTT_STATUS_TOPIC = MQTT_STATUS_TOPIC_BASE + macTopicPart + "/status";
+    // Construct wildcard command topics
+    MQTT_START_TOPIC = MQTT_COMMAND_TOPIC_BASE + "+/command/start";
+    MQTT_PACKET_TOPIC = MQTT_COMMAND_TOPIC_BASE + "+/command/packet";
+    MQTT_END_TOPIC = MQTT_COMMAND_TOPIC_BASE + "+/command/end";
+    // Status topic base remains, full topic constructed dynamically in publishStatus
 
     Serial.print("MQTT Client ID: "); Serial.println(MQTT_CLIENT_ID);
     Serial.print("MQTT Start Topic: "); Serial.println(MQTT_START_TOPIC);
     Serial.print("MQTT Packet Topic: "); Serial.println(MQTT_PACKET_TOPIC);
     Serial.print("MQTT End Topic: "); Serial.println(MQTT_END_TOPIC);
-    Serial.print("MQTT Status Topic: "); Serial.println(MQTT_STATUS_TOPIC);
+    Serial.print("MQTT Status Topic Base: "); Serial.println(MQTT_STATUS_TOPIC_BASE);
 
     connectWiFi();
     mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
     mqttClient.setCallback(mqttCallback);
+    mqttClient.setKeepAlive(60); // Increase keepalive to 60 seconds (PubSubClient default is 15s)
+    // mqttClient.loop() must be called within this interval. We call it frequently.
     // Increase MQTT buffer size if needed (PubSubClient default is small)
     // mqttClient.setBufferSize(1024); // Example if needed
 
     Serial.println("Initializing NimBLE...");
     NimBLEDevice::init("");
     // NimBLEDevice::setPower(ESP_PWR_LVL_P9); // Optional
+    // Connection timeout is set per-connection attempt on the client
 
     Serial.println("Setup complete.");
-    publishStatus("idle");
+    publishStatus("idle", ""); // Publish initial idle status (no specific target MAC)
 }
 
 // --- Main Loop ---
@@ -109,30 +118,44 @@ void loop() {
 
     // --- BLE Transfer Logic ---
     if (transferInProgress) {
-        // Check for inactivity timeout
-        if (millis() - lastActionTime > TRANSFER_TIMEOUT_MS) {
-            Serial.println("Transfer timed out due to inactivity.");
-            publishStatus("error_timeout");
-            disconnectBLE(true); // Force disconnect on timeout
-            transferInProgress = false;
-            // Clear queue
-            std::queue<std::vector<uint8_t>> empty;
-            std::swap(packetQueue, empty);
-        }
+        // REMOVED Inactivity Timeout Check - Replaced by connection retry logic below
 
         // If transfer is active, ensure BLE is connected
+        if (transferAborted) return; // Don't proceed if aborted in this iteration
+
         if (!bleConnected) {
-            if (!connectBLE()) {
-                Serial.println("BLE connection failed during transfer, retrying...");
-                publishStatus("connecting_ble");
-                delay(1000); // Wait before retrying connection
-                return; // Skip packet processing this loop
+            mqttClient.loop(); // Process MQTT just before potentially blocking BLE connect
+            if (!connectBLE(currentTargetMac)) {
+                // Connection failed
+                bleConnectRetries++;
+                Serial.printf("BLE connection failed (Attempt %d/%d). ", bleConnectRetries, MAX_BLE_CONNECT_RETRIES);
+                if (bleConnectRetries >= MAX_BLE_CONNECT_RETRIES) { // Use >= to correctly limit to MAX_BLE_CONNECT_RETRIES attempts
+                    Serial.println("Max retries reached. Aborting transfer.");
+                    publishStatus("error_ble_connect_failed", currentTargetMac);
+                    transferAborted = true;
+                    transferInProgress = false;
+                    disconnectBLE(true); // Force disconnect state cleanup
+                    return; // Exit loop iteration
+                } else {
+                    Serial.println("Retrying in 5s...");
+                    delay(5000); // Wait longer (5s) before retrying
+                    mqttClient.loop(); // Allow MQTT processing during delay
+                    return; // Skip packet processing for this iteration
+                }
+            } else {
+                 // Connection successful
+                 bleConnectRetries = 0; // Reset counter on successful connection
             }
+        } else {
+             // Already connected, ensure retry counter is reset
+             bleConnectRetries = 0;
         }
 
         // If connected and packets are waiting, process one
+        if (transferAborted) return; // Don't proceed if aborted in this iteration
         if (bleConnected && !packetQueue.empty()) {
             std::vector<uint8_t> packet = packetQueue.front();
+            mqttClient.loop(); // Process MQTT just before potentially blocking BLE write
             if (writePacketToBLE(packet)) {
                 packetQueue.pop(); // Remove packet only if write succeeded
                 packetsWrittenCount++;
@@ -143,32 +166,49 @@ void loop() {
                 if (packetQueue.empty() && endCommandReceived) {
                     transferInProgress = false; // Mark transfer as complete
                     Serial.println("All queued packets sent after END command.");
-                    publishStatus("complete"); // Publish completion status
+                    publishStatus("complete", currentTargetMac); // Publish completion status
                 } else {
-                    publishStatus("writing"); // Still writing packets
+                    publishStatus("writing", currentTargetMac); // Still writing packets
                 }
             } else {
                 Serial.println("Packet write failed. Will retry connection/write.");
-                publishStatus("error_write");
-                disconnectBLE(true); // Disconnect on write failure to force reconnect
+                publishStatus("error_write", currentTargetMac);
+                transferAborted = true; // Signal abort
+                disconnectBLE(true); // Disconnect on write failure
+                transferInProgress = false; // Mark transfer as failed/stopped
+                return; // Exit loop iteration immediately after write failure handling
                 // Packet remains in queue to be retried
                 delay(500); // Wait before retrying
+                mqttClient.loop(); // Allow MQTT processing during delay
             }
         }
     } else {
         // Transfer is NOT in progress (transferInProgress == false)
+        // This block executes once after transferInProgress becomes false (due to completion, timeout, or error)
+        // We need to ensure cleanup happens regardless of bleConnected state at this exact moment.
+
+        // Check if we *were* connected and need to disconnect now.
         if (bleConnected) {
-             // This state is reached after transferInProgress is set to false (either by completion or timeout)
-             Serial.println("Transfer finished or timed out, disconnecting idle BLE connection.");
-             disconnectBLE(); // Disconnect BLE cleanly
-             // Reset flags for next transfer (ensure timeout doesn't linger)
+             Serial.println("Transfer finished or aborted, disconnecting idle BLE connection.");
+             disconnectBLE(false); // Normal disconnect, force=false
+        }
+
+        // Perform cleanup if the target MAC is still set (meaning the transfer ended)
+        if (!currentTargetMac.empty()) {
+             Serial.printf(" -> Cleaning up state for completed/aborted transfer: %s\n", currentTargetMac.c_str());
+             // Reset flags for next transfer
              endCommandReceived = false;
-             lastActionTime = 0;
-             // Clear queue just in case (e.g., timeout occurred)
+             lastActionTime = 0; // Reset timer
+             bleConnectRetries = 0; // Reset retry counter
+             // Clear queue
              std::queue<std::vector<uint8_t>> empty;
              std::swap(packetQueue, empty);
-             publishStatus("idle"); // Ready for next transfer
+             // Clear the target MAC *here* after all actions related to it are done
+             currentTargetMac = "";
+             // Publish general idle status
+             publishStatus("idle", "");
         }
+        // If currentTargetMac was already empty (e.g., initial state), do nothing here.
     }
 
     delay(10); // Small delay
@@ -213,14 +253,14 @@ void connectMQTT() {
         bool sub_packet = mqttClient.subscribe(MQTT_PACKET_TOPIC.c_str());
         bool sub_end = mqttClient.subscribe(MQTT_END_TOPIC.c_str());
         if (sub_start && sub_packet && sub_end) {
-             Serial.println("Subscribed to command topics:");
-             Serial.println(MQTT_START_TOPIC);
-             Serial.println(MQTT_PACKET_TOPIC);
-             Serial.println(MQTT_END_TOPIC);
+             Serial.println("Subscribed to wildcard command topics:");
+             Serial.print(" - "); Serial.println(MQTT_START_TOPIC);
+             Serial.print(" - "); Serial.println(MQTT_PACKET_TOPIC);
+             Serial.print(" - "); Serial.println(MQTT_END_TOPIC);
         } else {
             Serial.println("Subscription failed!");
         }
-        publishStatus("idle"); // Report status after connecting
+        publishStatus("idle", ""); // Report initial idle status (no specific target MAC)
     } else {
         Serial.print(" failed, rc="); Serial.print(mqttClient.state());
         Serial.println(" Retrying in 5 seconds...");
@@ -228,36 +268,123 @@ void connectMQTT() {
     }
 }
 
+// Helper function to extract MAC from topic
+// Topic format: eink_display/AABBCCDDEEFF/command/start
+// Returns MAC with colons, or empty string if invalid
+std::string extractMacFromTopic(const char* topic) {
+    String topicStr = String(topic);
+    int firstSlash = topicStr.indexOf('/');
+    if (firstSlash == -1) return "";
+    int secondSlash = topicStr.indexOf('/', firstSlash + 1);
+    if (secondSlash == -1) return "";
+
+    String macPart = topicStr.substring(firstSlash + 1, secondSlash);
+    if (macPart.length() != 12) return ""; // Expect 12 hex chars
+
+    // Reconstruct MAC with colons
+    std::string formattedMac = "";
+    for (int i = 0; i < 12; i += 2) {
+        formattedMac += macPart.substring(i, i + 2).c_str();
+        if (i < 10) {
+            formattedMac += ":";
+        }
+    }
+    // Basic validation (ensure it looks like hex) - could be more robust
+    for (char c : formattedMac) {
+         if (!isxdigit(c) && c != ':') return "";
+    }
+    // Convert to uppercase for consistency
+    std::transform(formattedMac.begin(), formattedMac.end(), formattedMac.begin(), ::toupper);
+    return formattedMac;
+}
+
+
 // --- MQTT Message Callback ---
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
-    Serial.print("Message arrived ["); Serial.print(topic); Serial.print("] ");
-    payload[length] = '\0'; // Null-terminate payload for C-string functions
+    payload[length] = '\0'; // Null-terminate payload
     String topicStr = String(topic);
+    bool isPacket = topicStr.endsWith("/command/packet");
 
-    lastActionTime = millis(); // Reset inactivity timer on any command message
+    // Only print the full arrival message for non-packet commands to avoid serial clutter/corruption
+    if (!isPacket) {
+        Serial.print("Message arrived ["); Serial.print(topic); Serial.print("] ");
+    }
 
-    if (topicStr.equals(MQTT_START_TOPIC)) {
+    // Extract MAC address from the topic
+    std::string formattedMac = extractMacFromTopic(topic);
+    if (formattedMac.empty()) {
+        Serial.println(" -> Ignoring message on invalid topic format.");
+        return;
+    }
+    Serial.print(" -> Target MAC: "); Serial.print(formattedMac.c_str());
+
+    // Reset inactivity timer only if message is for the active transfer or a new start command
+    bool isStartCommand = topicStr.endsWith("/command/start");
+    if (isStartCommand || (transferInProgress && formattedMac == currentTargetMac)) {
+         lastActionTime = millis();
+         Serial.print(" (Timer Reset)");
+    }
+     // End initial log line only if it was started
+     if (!isPacket) {
+         Serial.println();
+     }
+
+
+    if (topicStr.endsWith("/command/start")) {
         Serial.println("Received START command.");
         if (transferInProgress) {
-            Serial.println("Warning: Received 'start' while transfer already in progress. Resetting.");
-            disconnectBLE(true); // Force disconnect previous transfer
+            if (formattedMac != currentTargetMac) {
+                 Serial.printf(" -> Warning: Busy with transfer for %s. Ignoring START for %s.\n", currentTargetMac.c_str(), formattedMac.c_str());
+                 return; // Ignore START for different MAC if busy
+            } else {
+                 Serial.println(" -> Warning: Received duplicate START for ongoing transfer. Resetting state.");
+                 // Resetting state might be desired if previous transfer stalled
+                 disconnectBLE(true); // Force disconnect previous attempt
+            }
         }
+
+        // --- Start new transfer ---
+        currentTargetMac = formattedMac; // Store the target MAC for this transfer
+        Serial.printf(" -> Starting transfer for %s\n", currentTargetMac.c_str());
+
+        // Attempt to create NimBLEAddress for validation
+        try {
+             // NimBLEAddress constructor might throw on invalid format
+             currentTargetAddress = NimBLEAddress(currentTargetMac, BLE_ADDR_PUBLIC); // Use std::string constructor + type
+             // Check if the address is valid (optional, NimBLEAddress might handle internally)
+             // if (!currentTargetAddress.isValid()) { ... }
+        } catch (const std::exception& e) { // Catch potential exceptions from NimBLEAddress constructor
+             Serial.printf(" -> ERROR: Invalid MAC address format received: %s. Exception: %s\n", currentTargetMac.c_str(), e.what());
+             publishStatus("error_invalid_mac", formattedMac); // Pass the MAC we tried
+             currentTargetMac = ""; // Clear invalid target
+             return;
+        } catch (...) { // Catch any other potential errors
+             Serial.printf(" -> ERROR: Unknown error creating NimBLEAddress for %s.\n", currentTargetMac.c_str());
+             publishStatus("error_invalid_mac", formattedMac); // Pass the MAC we tried
+             currentTargetMac = "";
+             return;
+        }
+
+
         // Clear queue and reset counters
         std::queue<std::vector<uint8_t>> empty;
         std::swap(packetQueue, empty);
         packetsReceivedCount = 0;
         endCommandReceived = false; // Reset flag on new transfer
         packetsWrittenCount = 0;
+        transferAborted = false; // Reset abort flag for new transfer
+        bleConnectRetries = 0; // Reset retry counter for new transfer
 
-        Serial.println("Starting transfer.");
-        transferInProgress = true;
-        publishStatus("starting");
+        transferInProgress = true; // Set flag AFTER validation and state reset
+        publishStatus("starting", currentTargetMac);
+
         // Attempt initial connection immediately
-        if (!bleConnected) connectBLE();
+        // connectBLE now takes the target MAC
+        if (!bleConnected) connectBLE(currentTargetMac); // Pass MAC
 
-    } else if (topicStr.equals(MQTT_PACKET_TOPIC)) {
-        if (!transferInProgress) {
-            Serial.println("Warning: Received 'packet' but no transfer in progress. Ignoring.");
+    } else if (topicStr.endsWith("/command/packet")) {
+        if (!transferInProgress || formattedMac != currentTargetMac) {
+            Serial.println(" -> Warning: Received 'packet' for inactive/wrong transfer. Ignoring.");
             return;
         }
         // Payload is the raw hex string
@@ -270,38 +397,42 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
             packetsReceivedCount++;
             // Serial.printf("Packet queued. Queue size: %d\n", packetQueue.size());
         } else {
-             Serial.println("Error converting hex packet data.");
-             publishStatus("error_packet_format");
+             Serial.println(" -> Error converting hex packet data.");
+             publishStatus("error_packet_format", currentTargetMac); // Use the currently active MAC
         }
 
-    } else if (topicStr.equals(MQTT_END_TOPIC)) {
-        if (!transferInProgress) {
-            Serial.println("Warning: Received 'end' but no transfer in progress. Ignoring.");
+    } else if (topicStr.endsWith("/command/end")) {
+        if (!transferInProgress || formattedMac != currentTargetMac) {
+            Serial.println(" -> Warning: Received 'end' for inactive/wrong transfer. Ignoring.");
             return;
         }
         Serial.printf("Received END command after %d packets received.\n", packetsReceivedCount);
         endCommandReceived = true; // Set flag
-        publishStatus("ending");
+        publishStatus("ending", currentTargetMac);
         // If queue is already empty when END arrives, finish immediately
         if (packetQueue.empty()) {
-            transferInProgress = false;
+            transferInProgress = false; // Loop will handle disconnect
         }
+    } else {
+         Serial.println(" -> Ignoring message on unknown command topic suffix.");
     }
 }
 
 // --- BLE Functions ---
-bool connectBLE() {
+// Updated connectBLE to accept target MAC
+bool connectBLE(const std::string& targetMac) {
     if (bleConnected) return true;
 
-    Serial.print("Attempting BLE connection to "); Serial.println(BLE_TARGET_MAC);
-    publishStatus("connecting_ble");
+    // Use the targetMac passed as argument
+    Serial.print("Attempting BLE connection to "); Serial.println(targetMac.c_str());
+    publishStatus("connecting_ble", targetMac); // Pass MAC to status
 
     // Create client if it doesn't exist
     if (!pClient) {
         pClient = NimBLEDevice::createClient();
         if (!pClient) {
             Serial.println("Failed to create BLE client");
-            publishStatus("error_ble_client");
+            publishStatus("error_ble_client", targetMac); // Pass MAC to status
             return false;
         }
         // Optional: Set connection parameters
@@ -316,10 +447,12 @@ bool connectBLE() {
     }
 
     // Initiate connection
-    if (!pClient->connect(targetAddress)) {
+    // Use currentTargetAddress which should have been set by mqttCallback
+    // Set connection timeout (e.g., 10 seconds)
+    if (!pClient->connect(currentTargetAddress, false, 10000)) { // address, is_initiator, timeout_ms
         Serial.println("Connection failed");
         // Don't delete client here, allow retry in main loop
-        publishStatus("error_ble_connect");
+        publishStatus("error_ble_connect", targetMac); // Pass MAC to status
         return false;
     }
     Serial.println("BLE Connected!");
@@ -329,7 +462,7 @@ bool connectBLE() {
     if (!pService) {
         Serial.print("Failed to find service UUID: "); Serial.println(serviceUUID.toString().c_str());
         pClient->disconnect();
-        publishStatus("error_ble_service");
+        publishStatus("error_ble_service", targetMac); // Pass MAC to status
         return false;
     }
     Serial.print("Found service: "); Serial.println(serviceUUID.toString().c_str());
@@ -339,13 +472,13 @@ bool connectBLE() {
     if (!pRemoteCharacteristic) {
         Serial.print("Failed to find characteristic UUID: "); Serial.println(characteristicUUID.toString().c_str());
         pClient->disconnect();
-        publishStatus("error_ble_char");
+        publishStatus("error_ble_char", targetMac); // Pass MAC to status
         return false;
     }
     Serial.print("Found characteristic: "); Serial.println(characteristicUUID.toString().c_str());
 
     bleConnected = true;
-    publishStatus("connected_ble");
+    publishStatus("connected_ble", targetMac); // Pass MAC to status
     return true;
 }
 
@@ -359,9 +492,13 @@ void disconnectBLE(bool force) {
     // pClient = nullptr;
     bleConnected = false;
     pRemoteCharacteristic = nullptr;
-    if (transferInProgress && !force) {
-         publishStatus("idle"); // Report idle only if disconnect wasn't forced
-    }
+    // Clear target MAC only if the transfer is truly finished or aborted by timeout/completion,
+    // NOT if we are forcing a disconnect due to a write error during an ongoing transfer where a retry might happen.
+    // The main loop's cleanup logic handles the final clearing when transferInProgress becomes false.
+    // We only clear here if force=false (meaning normal completion disconnect)
+    // We no longer clear currentTargetMac here.
+    // The main loop() cleanup logic handles this reliably after transferInProgress becomes false.
+    // Remove status publish from here, let loop() handle it.
 }
 
 bool writePacketToBLE(const std::vector<uint8_t>& packetData) {
@@ -415,9 +552,26 @@ std::vector<uint8_t> hexStringToBytes(const std::string& hex) {
     return bytes;
 }
 
-void publishStatus(const char* status) {
-    if (mqttClient.connected()) {
-        mqttClient.publish(MQTT_STATUS_TOPIC.c_str(), status);
+// Updated publishStatus to accept target MAC and construct topic dynamically
+void publishStatus(const char* status, const std::string& targetMac) {
+    // Check connection status using the client's state
+    if (mqttClient.state() != MQTT_CONNECTED) {
+        Serial.printf("MQTT not connected (state: %d), cannot publish status '%s'\n", mqttClient.state(), status);
+        return;
     }
-    Serial.print("Status: "); Serial.println(status);
+
+    String topic;
+    if (!targetMac.empty()) {
+        String macPart = targetMac.c_str();
+        macPart.replace(":", ""); // Remove colons for topic
+        topic = MQTT_STATUS_TOPIC_BASE + macPart + "/status";
+    } else {
+        // For generic statuses like initial 'idle', maybe publish to a general topic?
+        // Or just log locally? Let's publish to a base status topic for now.
+        topic = MQTT_STATUS_TOPIC_BASE + "bridge/status"; // e.g., eink_display/bridge/status
+        Serial.print("(Publishing general status) ");
+    }
+
+    mqttClient.publish(topic.c_str(), status);
+    Serial.printf("Status (%s): %s\n", targetMac.empty() ? "general" : targetMac.c_str(), status);
 }
