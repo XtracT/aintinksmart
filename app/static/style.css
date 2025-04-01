@@ -49,6 +49,13 @@ h1 {
     border-color: #2ecc71;
 }
 
+.form-text {
+    display: block;
+    font-size: 0.85em;
+    color: #666;
+    margin-top: 5px;
+}
+
 
 button[type="submit"] {
     display: block;

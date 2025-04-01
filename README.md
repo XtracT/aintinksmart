@@ -1,64 +1,101 @@
-# BLE E-Ink Image Sender Service
+# BLE E-Ink Image Sender Service (Hybrid: Direct BLE + MQTT)
 
-This project provides a Dockerized web service (using FastAPI) to send black/white or black/white/red images to certain types of Bluetooth Low Energy (BLE) e-ink displays. It offers both a simple Web UI for manual uploads and a JSON API for programmatic use.
+This project provides a Dockerized web service (using FastAPI) to send black/white or black/white/red images to certain types of Bluetooth Low Energy (BLE) e-ink displays.
+
+It operates in a **hybrid mode**:
+1.  It can attempt to send images **directly via BLE** if the container has access to the host's Bluetooth stack.
+2.  It can **publish commands via MQTT to an OpenMQTTGateway (OMG) instance**, which then handles the BLE communication with the target display.
+
+This offers flexibility for different deployment scenarios. The service provides both a simple Web UI and a JSON API.
 
 ## Description
 
-The service implements a communication protocol based on reverse engineering of the original device communication. It takes an image file (via upload or Base64 data), processes it into the required format, and transmits it to the specified display via BLE.
+The service implements a communication protocol based on reverse engineering. It takes an image file, processes it, builds the necessary BLE packets (including CRC and encryption), and then attempts to send them using one or both configured methods:
+*   **Direct BLE:** Using the host system's Bluetooth adapter.
+*   **OMG MQTT:** Publishing individual packet write commands to a configured OpenMQTTGateway instance via MQTT.
 
-The core logic is separated into distinct Python classes within the `app/` directory for better maintainability and testability.
+The core logic is separated into distinct Python classes within the `app/` directory.
 
 ## Disclaimer
 
-This service is unofficial and based on reverse engineering efforts. It is provided "as is" without warranty of any kind. While it aims to replicate the necessary protocol steps, there might be subtle differences compared to the official application, particularly in how images are dithered or converted to the display's color format. Use at your own discretion. Ensure you comply with any relevant terms of service for your device.
+This service is unofficial and based on reverse engineering efforts. It is provided "as is" without warranty of any kind. Use at your own discretion and ensure you comply with any relevant terms of service for your device.
 
 ## Requirements
 
 *   **Docker:** Required to build and run the service container.
-*   **Host System:**
-    *   A compatible BLE adapter (e.g., BlueZ on Linux, WinRT on Windows 10+, CoreBluetooth on macOS).
-    *   Working Bluetooth stack accessible by Docker (see Running the Service).
+*   **MQTT Broker (Optional):** Required if using the MQTT publishing feature.
+*   **Host System (for Direct BLE):**
+*   A compatible BLE adapter (e.g., BlueZ on Linux).
+*   Working Bluetooth stack accessible by Docker (see Running the Service).
+*   **OpenMQTTGateway (Optional):** An ESP32 (or other compatible device) running OpenMQTTGateway firmware with BLE enabled. This is required to receive commands via MQTT and perform the BLE transmission. See [OpenMQTTGateway Documentation](https://docs.openmqttgateway.com/).
 *   **(For Development):** Python 3.7+ and the libraries listed in `requirements.txt`.
+
+## Configuration (Environment Variables)
+
+The service is configured using environment variables when running the Docker container:
+
+*   `BLE_ENABLED` (Optional): Set to `true` (default) or `false`. If `false`, direct BLE attempts (including discovery) will be skipped.
+*   `MQTT_ENABLED` (Optional): Set to `true` or `false`. Defaults to `true` if `MQTT_BROKER` is set, otherwise `false`. Controls whether MQTT publishing occurs.
+*   `MQTT_BROKER` (Optional): Address/hostname of your MQTT broker (e.g., `192.168.1.100`). Setting this enables MQTT functionality by default.
+*   `MQTT_PORT` (Optional): Port of the MQTT broker (default: `1883`).
+*   `MQTT_USERNAME` (Optional): Username for MQTT authentication.
+*   `MQTT_PASSWORD` (Optional): Password for MQTT authentication.
+*   `MQTT_EINK_TOPIC_BASE` (Optional): Base topic used for communicating with the custom ESP32 firmware (default: `eink_display`). Commands are sent to `{MQTT_EINK_TOPIC_BASE}/{MAC_ADDRESS}/command/{start|packet|end}`.
+*   `EINK_PACKET_DELAY_MS` (Optional): Delay in milliseconds between sending individual packet messages via MQTT to the custom firmware. Defaults to `20`. This value (20ms) was found to work reliably with the custom firmware.
 
 ## Setup & Running the Service
 
 1.  **Build the Docker Image:**
-    Navigate to the project's root directory (where the `Dockerfile` is located) and run:
     ```bash
     docker build -t ble-sender-service .
     ```
 
 2.  **Run the Docker Container:**
-    The container needs access to the host's Bluetooth hardware. Choose **one** of the following methods:
+    Choose options based on whether you need direct BLE, MQTT, or both.
 
-    *   **Option 1: Host Network Mode (Simpler, Less Isolated)**
+    *   **Example: Direct BLE + MQTT:** (Requires host BLE access)
         ```bash
-        docker run --rm -it --net=host ble-sender-service
+        docker run --rm -it --net=host \
+          -e MQTT_BROKER=<your_broker_ip> \
+          -e MQTT_USERNAME=<your_mqtt_user> \
+          -e MQTT_PASSWORD=<your_mqtt_pass> \
+          # -e MQTT_COMMAND_TOPIC=custom/topic # Optional: Override default topic
+          ble-sender-service
         ```
-        *(Note: With `--net=host`, the service will be accessible via `http://localhost:8000` on the host machine.)*
 
-    *   **Option 2: D-Bus Mount (Recommended for Linux with BlueZ)**
-        This maps the host's D-Bus socket into the container, allowing communication with the BlueZ daemon.
+    *   **Example: MQTT Only:** (Container doesn't need host BLE access)
         ```bash
-        docker run --rm -it -p 8000:8000 -v /var/run/dbus:/var/run/dbus ble-sender-service
+        docker run --rm -it -p 8000:8000 \
+          -e MQTT_BROKER=<your_broker_ip> \
+          -e MQTT_USERNAME=<your_mqtt_user> \
+          -e MQTT_PASSWORD=<your_mqtt_pass> \
+          -e BLE_ENABLED=false \
+          ble-sender-service
         ```
-        *(Note: You might need additional privileges depending on your host system and Docker setup, such as `--cap-add=NET_ADMIN`, `--cap-add=SYS_ADMIN`, or even `--privileged`. Try without them first.)*
 
-    The service should now be running and accessible.
+    *   **Example: Direct BLE Only:** (Requires host BLE access)
+        ```bash
+        docker run --rm -it --net=host \
+          # Ensure MQTT_BROKER is NOT set, or set MQTT_ENABLED=false
+          ble-sender-service
+        ```
+        *(Note on BLE Access: Use `--net=host` or `-v /var/run/dbus:/var/run/dbus` plus potentially other privileges as needed for your host system.)*
+
+    The service should now be running on port 8000.
 
 ## Usage
 
 ### Web UI
 
-1.  Open your web browser and navigate to `http://localhost:8000` (or the IP address of your Docker host if applicable).
+1.  Open your web browser to `http://localhost:8000` (or the IP address of your Docker host).
 2.  Use the form to:
     *   Select an image file.
-    *   Enter the target display's BLE MAC address (format: `AA:BB:CC:DD:EE:FF`) **OR** click the "Discover" button.
-        *   Clicking "Discover" scans for nearby devices advertising "easyTag".
-        *   If devices are found, select the desired one from the dropdown list that appears. Its MAC address will automatically populate the input field.
+    *   Enter the target display's BLE MAC address **OR** click "Discover".
+        *   **Note:** The "Discover" button only works if `BLE_ENABLED=true` and the container has direct access to the host's Bluetooth stack.
+        *   If devices are found, select one from the dropdown to populate the MAC address field.
     *   Choose the color mode (`bwr` or `bw`).
     *   Click "Send Image".
-3.  Status messages will appear below the form.
+3.  Status messages will indicate success (via BLE or MQTT) or failure.
 
 ### JSON API
 
@@ -77,53 +114,59 @@ Send a `POST` request to the `/send_image` endpoint (e.g., `http://localhost:800
       "mode": "bwr" // Optional, defaults to "bwr"
     }
     ```
-    *   `mac_address`: (Required) Target device MAC address.
-    *   `image_data`: (Required) Base64 encoded string of the image file content.
-    *   `mode`: (Optional) `"bwr"` or `"bw"`. Defaults to `"bwr"`.
-
 *   **Responses:**
-    *   **Success (200 OK):**
+    *   **Success (200 OK):** Message indicates if sent via BLE, MQTT, or both.
         ```json
         {
           "status": "success",
-          "message": "Image successfully sent to AA:BB:CC:DD:EE:FF"
+          "message": "Image sent successfully via direct BLE to AA:BB:CC:DD:EE:FF. (Also published to MQTT)."
         }
         ```
-    *   **Error (4xx or 5xx):**
+        ```json
+        {
+          "status": "success",
+          "message": "Direct BLE failed. Command published successfully via MQTT to ble_sender/command/send_image for AA:BB:CC:DD:EE:FF."
+        }
+        ```
+    *   **Error (4xx or 5xx):** Indicates failure in processing or both communication methods.
         ```json
         {
           "status": "error",
-          "message": "Detailed error message (e.g., Invalid MAC address, BLE connection failed, ...)"
+          "message": "Both direct BLE communication and MQTT publishing failed."
+          // Or other specific error message
         }
         ```
-        *(Note: FastAPI might return errors in a slightly different format, often including a `detail` field, e.g., `{"detail": "Error message"}` for validation errors)*
+
+## Custom ESP32 Firmware Setup (Required for MQTT Mode)
+
+The MQTT functionality in this application is now designed to work with a **custom ESP32 firmware** (available separately, e.g., in the `mqtt_ble_eink_gateway` project) that specifically handles the BLE communication for the e-ink display.
+
+This firmware listens on three MQTT topics derived from the `MQTT_EINK_TOPIC_BASE` environment variable and the target device's MAC address:
+*   `{base}/{MAC}/command/start`: Receives an empty message to initiate the connection and transfer.
+*   `{base}/{MAC}/command/packet`: Receives the hex string of each BLE packet as the payload.
+*   `{base}/{MAC}/command/end`: Receives an empty message to signal the end of the transfer and allow disconnection.
+
+You need to compile and flash this custom firmware onto your ESP32 device. Ensure the MQTT broker settings in the firmware match those used by this application.
 
 ## Compatibility
 
-This service uses the same underlying protocol logic as the original script. Compatibility has been tested with:
+(Same as before - based on protocol reverse engineering)
 
 | Size  | Resolution | Colors | Part Number | Tested Status | Notes |
 | :---- | :--------- | :----- | :---------- | :------------ | :---- |
 | 7.5"  | 800x480    | BWR    | AES0750     | Yes           |       |
 
-*Feel free to report success or failure with other models via issues or pull requests.*
-
 ## Troubleshooting
 
-*   **Docker Build Issues:** Ensure you have Docker installed correctly and network access during the build process (for `apt-get` and `pip`).
-*   **Container Won't Start/BLE Errors:** The most common issue is Docker not having access to the host's Bluetooth.
-    *   Verify your host's Bluetooth is enabled and working (`bluetoothctl` on Linux).
-    *   Ensure the `bluetooth` service/daemon is running on the host.
-    *   Try both `--net=host` and the D-Bus volume mount methods.
-    *   If using the D-Bus mount, ensure permissions are correct. You might need to run the container with elevated privileges (use with caution).
-    *   Check container logs (`docker logs <container_id>`) for specific errors from `bleak` or the application.
-*   **Connection Issues:** Ensure the display is powered on, within range, and not connected to another device (like a phone). Double-check the MAC address.
-*   **Image Appearance:** The service uses basic thresholding for color conversion. Results may vary. Pre-processing images might yield better results.
+*   **Docker Build/Run Issues:** See previous README versions. Pay attention to environment variables and BLE access permissions if needed.
+*   **MQTT Issues:** Verify broker address, port, credentials. Check that the topic in the service config matches the ESPHome config. Use an MQTT client (like MQTT Explorer) to monitor the topic. Check service logs and ESPHome logs.
+*   **BLE Issues (Direct or Gateway):** Ensure display is powered, in range, not connected elsewhere. Double-check MAC address. Check service/ESPHome logs for `BleakError` or connection failures.
+*   **Image Appearance:** Same as before.
 
 ## Contributing
 
-(Optional: Add guidelines if you accept contributions)
+(Optional)
 
 ## License
 
-(Optional: Add license information, e.g., MIT License)
+(Optional)
