@@ -66,8 +66,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Device Discovery ---
     discoverButton.addEventListener('click', async () => {
-        setStatus('Scanning for devices (approx 5s)...', 'info');
+        // Determine potential scan time (longer if MQTT might be used)
+        // We don't know for sure if MQTT *will* be used, but we can guess based on config if needed
+        // For simplicity, just use a longer message if MQTT *could* be enabled server-side.
+        // A better approach might involve the backend telling the frontend the expected duration.
+        const potentialScanTime = 18; // Matches the backend wait time
+        setStatus(`Scanning for devices (up to ${potentialScanTime}s)...`, 'info');
         discoverButton.disabled = true;
+        discoverButton.textContent = 'Scanning...'; // Update button text
         discoveredDevicesSelect.innerHTML = '<option value="">-- Scanning... --</option>'; // Clear previous options
         discoverResultsDiv.style.display = 'block'; // Show the dropdown area
 
@@ -116,6 +122,7 @@ document.addEventListener('DOMContentLoaded', () => {
             discoveredDevicesSelect.innerHTML = '<option value="">-- Error --</option>';
         } finally {
             discoverButton.disabled = false; // Re-enable button
+            discoverButton.textContent = 'Discover'; // Restore button text
         }
     });
 

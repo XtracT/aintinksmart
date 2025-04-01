@@ -9,6 +9,7 @@ import time
 import json
 from typing import Dict, Optional, Tuple
 from dataclasses import dataclass, field
+from typing import Dict, Optional, Tuple, List, Any # Added List, Any
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,10 @@ class MqttManager:
         # State Tracking
         self.active_transfers: Dict[str, MqttTransferState] = {}
         self.state_lock = threading.Lock()
+
+        # Scan Results Storage
+        self.scan_results: Dict[str, List[Dict[str, str]]] = {} # Keyed by a unique scan ID
+        self.scan_results_lock = threading.Lock()
 
     def _on_connect(self, client, userdata, flags, rc):
         """Callback for MQTT connection."""
@@ -68,12 +73,15 @@ class MqttManager:
             # Expected status topic format: base/MAC_PART/status
             # We need the base topic to parse correctly. Assume it's passed or configured.
             # For now, let's parse assuming a known structure. This needs refinement.
-            # TODO: Pass MQTT_EINK_TOPIC_BASE to MqttManager or make parsing more robust.
+            # TODO: Pass MQTT topic base config to MqttManager or make parsing more robust.
+            # Assuming base topics are known for now for parsing.
+            # Example: status_base = "eink_display", scan_result_topic = "eink_display/scan/result"
+            status_base_topic = "eink_display" # Hardcoded for now, should be configurable
+            scan_result_topic = f"{status_base_topic}/scan/result"
             topic_parts = topic.split('/')
-            if len(topic_parts) >= 3 and topic_parts[-1] == 'status':
-                # Assuming base topic might have multiple parts, MAC is second to last
-                mac_topic_part = topic_parts[-2]
-
+            # Check if it's a transfer status topic
+            if topic.startswith(status_base_topic) and topic.endswith("/status") and len(topic_parts) >= 3:
+                mac_topic_part = topic_parts[-2] # MAC is second to last part
                 with self.state_lock:
                     if mac_topic_part in self.active_transfers:
                         state = self.active_transfers[mac_topic_part]
@@ -85,8 +93,39 @@ class MqttManager:
                         logger.info(f"Updated status for {mac_topic_part}: '{payload}'")
                     else:
                         logger.debug(f"Received status for inactive/unknown transfer: {topic}")
+
+            # Check if it's a scan result topic
+            elif topic == scan_result_topic:
+                 logger.debug(f"Received scan result: {payload}")
+                 try:
+                     device_info = json.loads(payload)
+                     # TODO: Need a way to associate this with a specific scan request ID
+                     # For now, storing in a general list under a default key 'current_scan'
+                     # This assumes only one scan runs at a time.
+                     scan_id = "current_scan" # Placeholder ID
+                     with self.scan_results_lock:
+                          if scan_id in self.scan_results:
+                               # Add device info if it has name and address
+                               if isinstance(device_info, dict) and "name" in device_info and "address" in device_info:
+                                    # Avoid duplicates based on address
+                                    address = device_info["address"]
+                                    if not any(d.get("address") == address for d in self.scan_results[scan_id]):
+                                         self.scan_results[scan_id].append(device_info)
+                                         logger.info(f"Stored scan result for {address}")
+                                    else:
+                                         logger.debug(f"Duplicate scan result ignored for {address}")
+                               else:
+                                    logger.warning(f"Received invalid scan result format: {payload}")
+                          else:
+                               logger.warning(f"Received scan result but no active scan found for ID '{scan_id}'")
+
+                 except json.JSONDecodeError:
+                      logger.error(f"Failed to parse JSON scan result: {payload}")
+                 except Exception as e:
+                      logger.error(f"Error processing scan result: {e}", exc_info=True)
+
             else:
-                 logger.debug(f"Ignoring message on non-status topic: {topic}")
+                 logger.debug(f"Ignoring message on unhandled topic: {topic}")
 
         except Exception as e:
             logger.error(f"Error processing MQTT message on topic {topic}: {e}", exc_info=True)
@@ -201,3 +240,18 @@ class MqttManager:
             else:
                  logger.warning(f"Attempted to remove non-existent transfer state for {mac_topic_part}")
             return state
+
+    # --- Scan Result Methods ---
+
+    def init_scan_results(self, scan_id: str = "current_scan"):
+        """Clears previous results and prepares to collect new scan results."""
+        with self.scan_results_lock:
+            self.scan_results[scan_id] = []
+            logger.info(f"Initialized scan results for ID: {scan_id}")
+
+    def get_scan_results(self, scan_id: str = "current_scan") -> List[Dict[str, str]]:
+        """Retrieves and clears the collected scan results for a given ID."""
+        with self.scan_results_lock:
+            results = self.scan_results.pop(scan_id, [])
+            logger.info(f"Retrieved {len(results)} scan results for ID: {scan_id}")
+            return results

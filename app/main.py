@@ -130,31 +130,102 @@ async def get_web_ui(request: Request):
 
 @app.get("/discover_devices",
          response_model=List[DiscoveredDevice],
-         summary="Scans for nearby BLE devices advertising 'easyTag'")
+         summary="Scans for nearby BLE devices advertising 'easyTag' via direct BLE and/or MQTT gateway")
 async def discover_devices():
-    """Scans for BLE devices for 5 seconds and filters for 'easyTag'."""
-    if not BLE_ENABLED:
-         logger.warning("Discovery endpoint called but direct BLE is disabled.")
-         raise HTTPException(status_code=403, detail="Direct BLE is disabled in server configuration.")
+    """
+    Scans for BLE devices advertising 'easyTag'.
+    Uses direct BLE scan if BLE_ENABLED=true.
+    Uses MQTT gateway scan if MQTT_ENABLED=true.
+    Combines results.
+    """
+    # Allow discovery if EITHER BLE or MQTT is enabled
+    if not BLE_ENABLED and not MQTT_ENABLED:
+         logger.warning("Discovery endpoint called but both BLE and MQTT are disabled.")
+         raise HTTPException(status_code=403, detail="Configuration Error: Neither direct BLE nor MQTT discovery is enabled.")
 
-    logger.info("Starting BLE device discovery...")
-    discovered_devices = []
-    try:
-        devices = await BleakScanner.discover(timeout=5.0)
-        logger.info(f"Scan finished. Found {len(devices)} devices.")
-        for device in devices:
-            if device.name and device.name.lower().startswith("easytag"):
-                logger.debug(f"Found matching device: Name={device.name}, Address={device.address}")
-                discovered_devices.append(DiscoveredDevice(name=device.name, address=device.address))
-    except BleakError as e:
-        logger.error(f"BLE scanning failed: {e}")
-        raise HTTPException(status_code=500, detail=f"BLE scanning failed: {e}. Ensure service has BLE access.")
-    except Exception as e:
-        logger.exception(f"Unexpected error during device discovery: {e}")
-        raise HTTPException(status_code=500, detail=f"Unexpected discovery error: {e}")
+    all_found_devices: Dict[str, DiscoveredDevice] = {} # Use dict to handle duplicates by MAC
 
-    logger.info(f"Returning {len(discovered_devices)} filtered devices.")
-    return discovered_devices
+    # --- Direct BLE Scan ---
+    if BLE_ENABLED:
+        logger.info("Starting direct BLE device discovery...")
+        try:
+            direct_devices = await BleakScanner.discover(timeout=5.0)
+            logger.info(f"Direct scan finished. Found {len(direct_devices)} devices.")
+            for device in direct_devices:
+                # Filter devices based on name (case-insensitive)
+                if device.name and device.name.lower().startswith("easytag"):
+                    logger.debug(f"Direct Found: Name={device.name}, Address={device.address}")
+                    # Add/update in dict, ensuring address is uppercase for consistent key
+                    all_found_devices[device.address.upper()] = DiscoveredDevice(name=device.name, address=device.address.upper())
+        except BleakError as e:
+            logger.error(f"Direct BLE scanning failed: {e}. Continuing with MQTT if enabled.")
+            # Don't raise HTTPException here, allow MQTT scan to proceed if enabled
+        except Exception as e:
+            logger.exception(f"Unexpected error during direct BLE discovery: {e}. Continuing with MQTT if enabled.")
+
+    # --- MQTT Gateway Scan ---
+    if MQTT_ENABLED and mqtt_manager:
+        if not mqtt_manager.is_connected():
+             logger.warning("MQTT discovery requested but manager is not connected. Skipping.")
+        else:
+            logger.info("Starting MQTT gateway device discovery...")
+            scan_result_topic = f"{MQTT_EINK_TOPIC_BASE}/scan/result"
+            scan_command_topic = f"{MQTT_EINK_TOPIC_BASE}/scan/command"
+            # Use scan duration from ESP + buffer time
+            # TODO: Make SCAN_DURATION_SECONDS available from config if possible
+            scan_wait_time = 18 # ESP scans for 15s (SCAN_DURATION_SECONDS), wait a bit longer
+            scan_id = "current_scan" # Simple ID for now
+
+            try:
+                # Prepare to receive results
+                mqtt_manager.init_scan_results(scan_id)
+
+                # Subscribe to results
+                sub_result, _ = mqtt_manager.subscribe(scan_result_topic, qos=0) # QoS 0 is fine for discovery
+                if sub_result != 0:
+                     logger.error(f"Failed to subscribe to MQTT scan result topic: {scan_result_topic}")
+                     # Proceed without MQTT scan if subscribe fails
+                else:
+                    try:
+                        # Publish scan command
+                        logger.info(f"Publishing scan command to {scan_command_topic}")
+                        mqtt_manager.publish(scan_command_topic, payload="", qos=0)
+
+                        # Wait for results
+                        logger.info(f"Waiting {scan_wait_time} seconds for MQTT scan results...")
+                        await asyncio.sleep(scan_wait_time)
+
+                    finally:
+                        # Unsubscribe regardless of publish success/failure after waiting
+                        logger.debug(f"Unsubscribing from {scan_result_topic}")
+                        mqtt_manager.unsubscribe(scan_result_topic)
+
+                    # Get results collected during the wait
+                    mqtt_results = mqtt_manager.get_scan_results(scan_id)
+                    logger.info(f"MQTT scan finished. Received {len(mqtt_results)} results.")
+
+                    # Add MQTT results to the combined dictionary
+                    for device_info in mqtt_results:
+                         # Ensure address is uppercase for consistent key
+                         address_upper = device_info.get("address", "").upper()
+                         if address_upper:
+                              # Add/update in dict
+                              all_found_devices[address_upper] = DiscoveredDevice(
+                                   name=device_info.get("name", "Unknown"),
+                                   address=address_upper
+                              )
+
+            except ConnectionError as e:
+                 logger.error(f"MQTT Connection Error during discovery: {e}")
+                 # Don't raise, just log that MQTT scan failed
+            except Exception as e:
+                 logger.exception(f"Unexpected error during MQTT discovery: {e}")
+                 # Don't raise, just log
+
+    # Convert combined dictionary values back to a list
+    final_device_list = list(all_found_devices.values())
+    logger.info(f"Returning {len(final_device_list)} unique discovered devices.")
+    return final_device_list
 
 
 @app.post("/send_image",
