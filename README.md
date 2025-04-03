@@ -1,20 +1,23 @@
-# BLE E-Ink Image Sender Service (Hybrid: Direct BLE + MQTT)
+# BLE E-Ink Image Sender Service (Headless MQTT/BLE)
 
-This project provides a Dockerized web service (using FastAPI) to send black/white or black/white/red images to certain types of Bluetooth Low Energy (BLE) e-ink displays.
+This project provides a Dockerized headless service to send black/white or black/white/red images to certain types of Bluetooth Low Energy (BLE) e-ink displays.
 
-It operates in a **hybrid mode**:
-1.  It can attempt to send images **directly via BLE** if the container has access to the host's Bluetooth stack.
-2.  It can **publish commands via MQTT to a custom ESP32 gateway firmware** (provided in `src/`), which then handles the BLE communication with the target display specified in the MQTT topic.
+It operates in one of two modes, determined at startup by environment variables:
 
-This offers flexibility for different deployment scenarios. The service provides both a simple Web UI and a JSON API.
+1.  **Direct BLE Mode (`BLE_ENABLED=true`, `USE_GATEWAY=false`):** Sends images and performs scans directly via BLE if the container has access to the host's Bluetooth stack.
+2.  **MQTT Gateway Mode (`USE_GATEWAY=true`):** Publishes image commands and scan triggers via MQTT to a custom ESP32 gateway firmware (provided in `src/`), which then handles the BLE communication.
+
+The service listens for image sending and scan requests on configured MQTT topics and publishes intermediate status updates to a default topic.
 
 ## Description
 
-The service implements a communication protocol based on reverse engineering. It takes an image file, processes it, builds the necessary BLE packets (including CRC and encryption), and then attempts to send them using one or both configured methods:
-*   **Direct BLE:** Using the host system's Bluetooth adapter.
-*   **MQTT Gateway:** Publishing start/packet/end commands to the custom ESP32 gateway firmware via MQTT.
+The service implements a communication protocol based on reverse engineering. It listens for requests on MQTT topics.
+- **Send Image:** When a request arrives, it takes the image data (base64 encoded), processes it, builds the necessary BLE packets, publishes status updates (e.g., "processing", "sending") to a default status topic, and attempts to send the packets using the configured method (Direct BLE or MQTT Gateway).
+- **Scan:** When a scan request arrives, it either performs a direct BLE scan or triggers a scan via the MQTT gateway, based on the configured mode.
 
-The core logic is separated into distinct Python classes within the `app/` directory.
+If a `response_topic` is included in the request payload, the service will publish a final status message (success/error or scan results/trigger confirmation) back to that specific topic after the attempt is complete.
+
+The core logic uses `aiomqtt` for asynchronous MQTT communication and `bleak` for direct BLE interactions.
 
 ## Disclaimer
 
@@ -23,146 +26,148 @@ This service is unofficial and based on reverse engineering efforts. It is provi
 ## Requirements
 
 *   **Docker:** Required to build and run the service container.
-*   **MQTT Broker (Optional):** Required if using the MQTT publishing feature.
-*   **Host System (for Direct BLE):**
-*   A compatible BLE adapter (e.g., BlueZ on Linux).
-*   Working Bluetooth stack accessible by Docker (see Running the Service).
-*   **Custom ESP32 Firmware (Optional, for MQTT Mode):** An ESP32 device running the custom gateway firmware provided in the `src/` directory of this project. This firmware receives commands via MQTT and performs the BLE transmission to the target display.
-*   **(For Development):** Python 3.7+ and the libraries listed in `requirements.txt`.
+*   **MQTT Broker:** Required for receiving requests and optionally for using the MQTT Gateway mode.
+*   **Host System (for Direct BLE Mode):**
+    *   A compatible BLE adapter (e.g., BlueZ on Linux).
+    *   Working Bluetooth stack accessible by Docker (see Running the Service).
+*   **Custom ESP32 Firmware (for MQTT Gateway Mode):** An ESP32 device running the custom gateway firmware provided in the `src/` directory.
+*   **(For Development/CLI):** Python 3.10+ and the libraries listed in `requirements.txt` (includes `paho-mqtt` for CLI scripts).
 
 ## Configuration (Environment Variables)
 
 The service is configured using environment variables when running the Docker container:
 
-*   `BLE_ENABLED` (Optional): Set to `true` (default) or `false`. If `false`, direct BLE attempts (including discovery) will be skipped.
-*   `MQTT_ENABLED` (Optional): Set to `true` or `false`. Defaults to `true` if `MQTT_BROKER` is set, otherwise `false`. Controls whether MQTT publishing occurs.
-*   `MQTT_BROKER` (Optional): Address/hostname of your MQTT broker (e.g., `192.168.1.100`). Setting this enables MQTT functionality by default.
+*   `BLE_ENABLED` (Optional): Set to `true` (default) or `false`. Required for Direct BLE mode.
+*   `USE_GATEWAY` (Optional): Set to `true` or `false` (default). If `true`, MQTT Gateway mode is used (requires `MQTT_BROKER` to be set). If `false`, Direct BLE mode is used (requires `BLE_ENABLED=true`).
+*   `MQTT_BROKER` (Required): Address/hostname of your MQTT broker (e.g., `192.168.1.100`).
 *   `MQTT_PORT` (Optional): Port of the MQTT broker (default: `1883`).
 *   `MQTT_USERNAME` (Optional): Username for MQTT authentication.
 *   `MQTT_PASSWORD` (Optional): Password for MQTT authentication.
-*   `MQTT_EINK_TOPIC_BASE` (Optional): Base topic used for communicating with the custom ESP32 firmware (default: `eink_display`). Commands are sent to `{MQTT_EINK_TOPIC_BASE}/{MAC_NO_COLONS}/command/{start|packet|end}` and status is received from `{MQTT_EINK_TOPIC_BASE}/{MAC_NO_COLONS}/status`. `{MAC_NO_COLONS}` is the target device's MAC address without colons (e.g., `AABBCCDDEEFF`).
-*   `EINK_PACKET_DELAY_MS` (Optional): Delay in milliseconds between sending individual packet messages via MQTT to the custom firmware. Defaults to `20`. This value (20ms) was found to work reliably with the custom firmware.
+*   `MQTT_REQUEST_TOPIC` (Optional): The MQTT topic the service listens on for incoming image send requests (default: `eink_sender/request/send_image`).
+*   `MQTT_SCAN_REQUEST_TOPIC` (Optional): The MQTT topic the service listens on for incoming scan requests (default: `eink_sender/request/scan`).
+*   `MQTT_DEFAULT_STATUS_TOPIC` (Optional): The MQTT topic the service publishes intermediate status updates to (default: `eink_sender/status/default`).
+*   `MQTT_EINK_TOPIC_BASE` (Optional, for MQTT Gateway Mode): Base topic used for communicating with the custom ESP32 firmware (default: `eink_display`). Commands are sent to `{MQTT_EINK_TOPIC_BASE}/{MAC_NO_COLONS}/command/{start|packet|end}` and scan commands to `{MQTT_EINK_TOPIC_BASE}/scan/command`.
+*   `EINK_PACKET_DELAY_MS` (Optional, for MQTT Gateway Mode): Delay in milliseconds between sending individual packet messages via MQTT to the custom firmware. Defaults to `20`.
+
+**Note:** The service will exit on startup if a valid operating mode cannot be determined (e.g., `USE_GATEWAY=true` but `MQTT_BROKER` is not set, or `USE_GATEWAY=false` and `BLE_ENABLED=false`).
 
 ## Setup & Running the Service
 
-1.  **Build the Docker Image:**
+1.  **(Optional) Configure ESP32 Firmware:** If using MQTT Gateway mode, configure and flash the firmware in the `src/` directory to your ESP32 (see "Custom ESP32 Firmware" section below).
+2.  **Build the Docker Image:**
     ```bash
     docker build -t ble-sender-service .
     ```
+3.  **Run the Docker Container:** (Choose one mode)
 
-2.  **Run the Docker Container:**
-    Choose options based on whether you need direct BLE, MQTT, or both.
-
-    *   **Example: Direct BLE + MQTT:** (Requires host BLE access)
+    *   **Example: MQTT Gateway Mode:**
         ```bash
+        docker run --rm -it \
+          -e MQTT_BROKER=<your_broker_ip> \
+          -e MQTT_USERNAME=<your_mqtt_user> \
+          -e MQTT_PASSWORD=<your_mqtt_pass> \
+          -e USE_GATEWAY=true \
+          # -e MQTT_REQUEST_TOPIC=custom/request/topic # Optional
+          # -e MQTT_SCAN_REQUEST_TOPIC=custom/scan/topic # Optional
+          # -e MQTT_DEFAULT_STATUS_TOPIC=custom/status/topic # Optional
+          # -e MQTT_EINK_TOPIC_BASE=custom/eink/base # Optional
+          ble-sender-service
+        ```
+
+    *   **Example: Direct BLE Mode:** (Requires host BLE access)
+        ```bash
+        # Ensure container has BLE access (--net=host or other method)
         docker run --rm -it --net=host \
           -e MQTT_BROKER=<your_broker_ip> \
           -e MQTT_USERNAME=<your_mqtt_user> \
           -e MQTT_PASSWORD=<your_mqtt_pass> \
-          # -e MQTT_COMMAND_TOPIC=custom/topic # Optional: Override default topic
+          -e BLE_ENABLED=true \
+          -e USE_GATEWAY=false \
+          # -e MQTT_REQUEST_TOPIC=custom/request/topic # Optional
+          # -e MQTT_SCAN_REQUEST_TOPIC=custom/scan/topic # Optional
+          # -e MQTT_DEFAULT_STATUS_TOPIC=custom/status/topic # Optional
           ble-sender-service
         ```
 
-    *   **Example: MQTT Only:** (Container doesn't need host BLE access)
-        ```bash
-        docker run --rm -it -p 8000:8000 \
-          -e MQTT_BROKER=<your_broker_ip> \
-          -e MQTT_USERNAME=<your_mqtt_user> \
-          -e MQTT_PASSWORD=<your_mqtt_pass> \
-          -e BLE_ENABLED=false \
-          ble-sender-service
-        ```
+## Usage (via MQTT or CLI Scripts)
 
-    *   **Example: Direct BLE Only:** (Requires host BLE access)
-        ```bash
-        docker run --rm -it --net=host \
-          # Ensure MQTT_BROKER is NOT set, or set MQTT_ENABLED=false
-          ble-sender-service
-        ```
-        *(Note on BLE Access: Use `--net=host` or `-v /var/run/dbus:/var/run/dbus` plus potentially other privileges as needed for your host system.)*
+### 1. Sending an Image
 
-    The service should now be running on port 8000.
-
-## Usage
-
-### Web UI
-
-1.  Open your web browser to `http://localhost:8000` (or the IP address of your Docker host).
-2.  Use the form to:
-    *   Select an image file.
-    *   Enter the target display's BLE MAC address **OR** click "Discover".
-        *   **Note:** The "Discover" button uses a hybrid approach. If `BLE_ENABLED=true` and the container has Bluetooth access, it performs a direct BLE scan. If `MQTT_ENABLED=true`, it *also* triggers a scan via the ESP32 gateway by publishing to `{MQTT_EINK_TOPIC_BASE}/scan/command`. The service waits briefly for results published by the ESP32 to `{MQTT_EINK_TOPIC_BASE}/scan/result` and combines them with any direct scan results. Discovery works if *either* method is enabled and functional.
-        *   If devices are found, select one from the dropdown to populate the MAC address field.
-    *   Choose the color mode (`bwr` or `bw`).
-    *   Click "Send Image".
-3.  Status messages will indicate success (via BLE or MQTT) or failure.
-
-### JSON API
-
-Send a `POST` request to the `/send_image` endpoint (e.g., `http://localhost:8000/send_image`).
-
-> **Note:** Interactive API documentation (Swagger UI) is available at `/docs` and alternative documentation (ReDoc) is at `/redoc` when the service is running.
-
-*   **Method:** `POST`
-*   **URL:** `/send_image`
-*   **Headers:** `Content-Type: application/json`
-*   **Body (JSON):**
+*   **Via MQTT:**
+    Publish a JSON payload to the configured `MQTT_REQUEST_TOPIC` (default: `eink_sender/request/send_image`).
     ```json
     {
       "mac_address": "AA:BB:CC:DD:EE:FF",
       "image_data": "base64_encoded_image_string_here...",
-      "mode": "bwr" // Optional, defaults to "bwr"
+      "mode": "bwr", // or "bw"
+      "response_topic": "optional/topic/for/result" // Optional
     }
     ```
-*   **Responses:**
-    *   **Success (200 OK):** Message indicates if sent via BLE, MQTT, or both.
-        ```json
-        {
-          "status": "success",
-          "message": "Image sent successfully via direct BLE to AA:BB:CC:DD:EE:FF. (Also published to MQTT)."
-        }
-        ```
-        ```json
-        {
-          "status": "success",
-          "message": "Direct BLE failed. Image packets published successfully via MQTT for AA:BB:CC:DD:EE:FF. Final ESP Status: complete."
-        }
-        ```
-    *   **Error (4xx or 5xx):** Indicates failure in processing or both communication methods.
-        ```json
-        {
-          "status": "error",
-          "message": "Both direct BLE communication and MQTT publishing failed."
-          // Or other specific error message
-        }
-        ```
+    Monitor the `MQTT_DEFAULT_STATUS_TOPIC` (default: `eink_sender/status/default`) for intermediate status updates (JSON payload: `{"mac_address": "...", "status": "...", ...}`).
+    If `response_topic` is provided, monitor it for the final JSON result message.
+
+*   **Via CLI Script (`send_image_cli.py`):**
+    (Requires Python and `paho-mqtt` installed locally: `pip install paho-mqtt`)
+    ```bash
+    python send_image_cli.py \
+      --broker <your_broker_ip> \
+      --user <your_mqtt_user> \
+      --pass <your_mqtt_pass> \
+      --mac AA:BB:CC:DD:EE:FF \
+      --image /path/to/your/image.png \
+      --mode bwr \
+      --response-topic sender/result # Optional: wait for specific final result
+      # --default-status-topic custom/status # Optional
+      # --timeout 60 # Optional: seconds to wait for status/response
+    ```
+    The script automatically subscribes to the default status topic and prints updates for the target MAC address. If `--response-topic` is given, it waits for a message on that topic or until the timeout. Use `python send_image_cli.py --help` for all options.
+
+### 2. Scanning for Devices
+
+*   **Via MQTT:**
+    Publish a JSON payload to the configured `MQTT_SCAN_REQUEST_TOPIC` (default: `eink_sender/request/scan`).
+    ```json
+    {
+      "action": "scan",
+      "response_topic": "optional/topic/for/result" // Optional
+    }
+    ```
+    If `response_topic` is provided:
+    *   In Direct BLE mode, monitor it for a JSON result: `{"status": "success", "method": "ble", "devices": [{"name": ..., "address": ...}, ...]}`
+    *   In MQTT Gateway mode, monitor it for a confirmation: `{"status": "success", "method": "mqtt", "message": "Gateway scan triggered..."}`. You must *also* separately monitor the gateway's result topic (default: `eink_display/scan/result`) for the actual devices found by the ESP32.
+
+*   **Via CLI Script (`scan_ble_cli.py`):**
+    (Requires Python and `paho-mqtt` installed locally: `pip install paho-mqtt`)
+    ```bash
+    python scan_ble_cli.py \
+      --broker <your_broker_ip> \
+      --user <your_mqtt_user> \
+      --pass <your_mqtt_pass> \
+      --timeout 20 # Optional: seconds to wait
+    ```
+    This script automatically subscribes to both the service response topic and the default gateway result topic, publishing the scan request and printing any discovered devices received on either topic within the timeout. Use `python scan_ble_cli.py --help` for all options.
 
 ## Custom ESP32 Firmware (MQTT Gateway Mode)
 
-The MQTT functionality relies on the custom ESP32 firmware located in the `src/` directory of this project. This firmware acts as a dedicated MQTT-to-BLE gateway for the E-Ink displays.
+(This section remains largely the same)
+
+The MQTT functionality relies on the custom ESP32 firmware located in the `src/` directory.
 
 **Functionality:**
-*   Connects to WiFi and the specified MQTT broker.
-*   Subscribes to wildcard command topics: `{base}/+/command/start`, `{base}/+/command/packet`, `{base}/+/command/end`.
-*   Parses the target device MAC address from the received topic.
-*   Handles one transfer at a time. If a `start` command for a new MAC arrives while busy, it's ignored.
-*   On `start`: Connects to the target BLE device specified in the topic.
-*   On `packet`: Queues the received hex payload (after converting to bytes) for writing to the BLE characteristic.
-*   On `end`: Signals the end of packet reception.
-*   Manages BLE connection retries and packet writing.
-*   Publishes status updates (e.g., `starting`, `connecting_ble`, `writing`, `complete`, `error_...`) to a device-specific status topic: `{base}/{MAC_NO_COLONS}/status`.
-*   Listens for scan commands (any payload) on `{MQTT_EINK_TOPIC_BASE}/scan/command`.
-*   Performs a **blocking** BLE scan for `SCAN_DURATION_SECONDS` (defined in `src/config.h`) looking for devices advertising the name "easytag" (case-insensitive).
-*   Publishes discovered device details (`name`, `address`) as individual JSON messages to `{MQTT_EINK_TOPIC_BASE}/scan/result` for each matching device found during the scan.
+*   Connects to WiFi and MQTT broker.
+*   Subscribes to command topics: `{base}/+/command/start`, `{base}/+/command/packet`, `{base}/+/command/end`.
+*   Subscribes to scan command topic: `{base}/scan/command`.
+*   Handles image transfer commands.
+*   Publishes status updates to `{base}/{MAC_NO_COLONS}/status`.
+*   On receiving message on `{base}/scan/command`, performs BLE scan and publishes results to `{base}/scan/result`.
 
 **Setup:**
-1.  Open the `src/config.h` file.
-2.  Configure your `WIFI_SSID`, `WIFI_PASSWORD`, `MQTT_BROKER`, and optionally `MQTT_USER`/`MQTT_PASSWORD` placeholders. Verify `BLE_SERVICE_UUID_STR` and `BLE_CHARACTERISTIC_UUID_STR` match your display. Adjust `SCAN_DURATION_SECONDS` if needed.
-3.  Compile and flash the firmware to your ESP32 device using PlatformIO (e.g., `platformio run --target upload`). Ensure the correct serial port is detected or specified in `platformio.ini`.
+1.  Configure `src/config.h`.
+2.  Compile and flash using PlatformIO.
 
 ## Compatibility
 
-(Same as before - based on protocol reverse engineering)
+(Table remains the same)
 
 | Size  | Resolution | Colors | Part Number | Tested Status | Notes |
 | :---- | :--------- | :----- | :---------- | :------------ | :---- |
@@ -170,10 +175,10 @@ The MQTT functionality relies on the custom ESP32 firmware located in the `src/`
 
 ## Troubleshooting
 
-*   **Docker Build/Run Issues:** See previous README versions. Pay attention to environment variables and BLE access permissions if needed.
-*   **MQTT Issues:** Verify broker address, port, credentials. Check the base topic (`MQTT_EINK_TOPIC_BASE`) matches between the service and the firmware config (`src/config.h`). Use an MQTT client (like MQTT Explorer) to monitor the command topics (e.g., `eink_display/+/command/#`), status topics (`eink_display/+/status`), the scan command topic (`eink_display/scan/command`), and the scan result topic (`eink_display/scan/result`). Check service logs and ESP32 serial monitor output.
-*   **BLE Issues (Direct or Gateway):** Ensure display is powered, in range, not connected elsewhere. Double-check MAC address. Check service/ESPHome logs for `BleakError` or connection failures.
-*   **Image Appearance:** Same as before.
+*   **Docker Build/Run Issues:** Check environment variables, BLE access permissions if using Direct BLE mode. Ensure correct operating mode is selected via `USE_GATEWAY` and `BLE_ENABLED`.
+*   **MQTT Issues:** Verify broker details. Check request topics (`MQTT_REQUEST_TOPIC`, `MQTT_SCAN_REQUEST_TOPIC`) and status topic (`MQTT_DEFAULT_STATUS_TOPIC`). If using Gateway Mode, check `MQTT_EINK_TOPIC_BASE`. Use an MQTT client to monitor topics. Check service logs.
+*   **BLE Issues (Direct or Gateway):** Ensure display is powered, in range. Double-check MAC address. Check service logs for `BleakError`. Check ESP32 serial monitor output if using Gateway Mode.
+*   **Image Appearance:** Ensure correct `mode` ("bw" or "bwr") is specified.
 
 ## Contributing
 

@@ -20,7 +20,7 @@ COPY requirements.txt .
 
 # Install any needed packages specified in requirements.txt
 # Using --no-cache-dir reduces image size
-# This now includes paho-mqtt
+# This now includes aiomqtt
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the application code into the container
@@ -28,22 +28,33 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY ./app /app/app
 
 # Make port 8000 available to the world outside this container
-EXPOSE 8000
+# EXPOSE 8000 # No longer a web service
 
 # Define environment variables for configuration (defaults can be overridden at runtime)
 ENV MQTT_BROKER=""
 ENV MQTT_PORT="1883"
 ENV MQTT_USERNAME=""
-ENV MQTT_PASSWORD=""
-# Default topic for publishing commands to ESPHome gateway
-ENV MQTT_COMMAND_TOPIC="ble_sender/command/send_image"
-# Attempt direct BLE by default if container has access
+# ENV MQTT_PASSWORD="" # Removed default, must be provided at runtime if needed
+# Base topic for ESP32 commands/status
+ENV MQTT_EINK_TOPIC_BASE="eink_display"
+# Topic to listen for requests
+ENV MQTT_REQUEST_TOPIC="eink_sender/request/send_image"
+# Topic to listen for scan requests
+ENV MQTT_SCAN_REQUEST_TOPIC="eink_sender/request/scan"
+# Default topic for publishing general status updates
+ENV MQTT_DEFAULT_STATUS_TOPIC="eink_sender/status/default"
+ENV EINK_PACKET_DELAY_MS="20"
+# Still relevant for BLE timeout? Maybe remove later.
+ENV MQTT_STATUS_TIMEOUT_SEC="60"
+# Enable direct BLE attempts by default
 ENV BLE_ENABLED="true"
-# MQTT_ENABLED defaults to true if MQTT_BROKER is set at runtime, unless explicitly set to false via -e MQTT_ENABLED=false
+# Use direct BLE by default if BLE_ENABLED=true
+ENV USE_GATEWAY="false"
 
 # Run the application using uvicorn
 # Use 0.0.0.0 to bind to all interfaces inside the container
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run the Python module directly
+CMD ["python", "-m", "app.main"]
 
 # --- Reminder on Running ---
 # Build: docker build -t ble-sender-service .
