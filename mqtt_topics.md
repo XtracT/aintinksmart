@@ -58,9 +58,6 @@ Topics for controlling or getting status about operations targeting a specific d
     *   **Function:** The service publishes individual image data packets (hex string) for the target device.
     *   *Subscription Pattern (ESP32):* `aintinksmart/gateway/display/+/command/packet`
 
-*   **~~`aintinksmart/gateway/display/+/command/end`~~** (Removed)
-    *   *Function:* This command is no longer used. The gateway determines completion based on the packet count received in the `start` command payload and an internal timeout.
-
 *   **`aintinksmart/gateway/display/{MAC}/status`**
     *   **Direction:** ESP32 -> Service/Client(s)
     *   **Function:** The ESP32 publishes status updates specific to the ongoing image transfer for the given device (e.g., `starting`, `writing`, `ble_connected`, `error_connect`, `complete`).

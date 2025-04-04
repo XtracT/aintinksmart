@@ -110,7 +110,6 @@ Primarily configured via environment variables (see `README.md`). `BLE_ENABLED` 
 
 ## 3. ESP32 Firmware (`src/`)
 
-(Remains the same as previous version, describing its role in MQTT Gateway mode for both sending and scanning).
 
 ## 4. Communication Protocols
 

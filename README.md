@@ -152,9 +152,15 @@ Communication primarily happens via MQTT messages. See [mqtt_topics.md](mqtt_top
     ```
     This script automatically subscribes to the service status topic (`--service-status-topic`) and the gateway result topic (`--gateway-result-topic`), publishing the scan request and printing any discovered devices received on either topic within the timeout. Use `python scan_ble_cli.py --help` for all options.
 
-## Custom ESP32 Firmware (MQTT Gateway Mode)
+## Reference Scripts
 
-(This section remains largely the same)
+### `send_bwr_ble.py`
+
+This script represents the original proof-of-concept developed during the reverse engineering of the e-ink display's BLE communication protocol. It demonstrates the core logic for connecting and sending image data directly via BLE using the `bleak` library, without the surrounding service infrastructure (MQTT, Docker, etc.).
+
+It is included in the repository primarily for reference purposes, allowing users to understand the fundamental BLE interaction sequence without needing to navigate the more complex service application code.
+
+## Custom ESP32 Firmware (MQTT Gateway Mode)
 
 The MQTT functionality relies on the custom ESP32 firmware located in the `src/` directory. See [ARCHITECTURE.md](ARCHITECTURE.md) for more details on the gateway's role and interaction with the service.
 
@@ -173,8 +179,6 @@ The MQTT functionality relies on the custom ESP32 firmware located in the `src/`
 
 ## Compatibility
 
-(Table remains the same)
-
 | Size  | Resolution | Colors | Part Number | Tested Status | Notes |
 | :---- | :--------- | :----- | :---------- | :------------ | :---- |
 | 7.5"  | 800x480    | BWR    | AES0750     | Yes           |       |
@@ -188,8 +192,4 @@ The MQTT functionality relies on the custom ESP32 firmware located in the `src/`
 
 ## Contributing
 
-(Optional)
-
 ## License
-
-(Optional)
