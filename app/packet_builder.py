@@ -29,18 +29,17 @@ class PacketBuilder:
             byte_val = data[i] & 0xFF
             # Process two nibbles per byte
             for _ in range(2):
-                # lookup_idx = ((crc_val >> 8) ^ byte_val) >> 4 # Original logic
-                # Ensure intermediate values stay within reasonable bounds if needed, though Python handles large ints
+                # Ensure intermediate XOR result is byte-sized
                 temp_val = ((crc_val >> 8) ^ byte_val) & 0xFF # Ensure intermediate XOR result is byte-sized
                 lookup_idx = temp_val >> 4
 
                 if lookup_idx >= len(config.CRC_TABLE):
                      raise PacketBuilderError(f"CRC lookup index {lookup_idx} out of bounds for CRC_TABLE.")
 
-                crc_val = (config.CRC_TABLE[lookup_idx] ^ (crc_val << 4)) & 0xFFFF # Keep CRC as 16-bit
-                byte_val = (byte_val << 4) & 0xFF # Move to next nibble (mask to keep it a byte)
+                crc_val = (config.CRC_TABLE[lookup_idx] ^ (crc_val << 4)) & 0xFFFF
+                byte_val = (byte_val << 4) & 0xFF # Move to next nibble
 
-        return crc_val & 0xFFFF # Final mask to ensure 16-bit
+        return crc_val & 0xFFFF
 
     def _calculate_xor_keys(self, ble_mac: str) -> Tuple[int, int]:
         """Calculates the XOR keys based on MAC address and secret string."""
@@ -58,7 +57,7 @@ class PacketBuilder:
         mac_xor_key &= 0xFF
 
         try:
-            # Using the specific index from the original script
+            # Use specific index from protocol analysis
             secret_char_key = ord(config.SECRET_STR[config.HEADER_PROTOCOL_BYTE_VAL]) & 0xFF
         except IndexError:
             logging.error(f"SECRET_STR is too short! Needed index {config.HEADER_PROTOCOL_BYTE_VAL}")
@@ -112,17 +111,11 @@ class PacketBuilder:
 
         payload_len = len(payload_bytes)
 
-        # Calculate number of data chunks needed (protocol specific calculation)
+        # Calculate number of data chunks needed
         # These constants define the chunking strategy
         data_per_chunk = config.DATA_CHUNK_PAYLOAD_LENGTH
         chunk_overhead = config.DATA_CHUNK_TOTAL_LENGTH - data_per_chunk # Index + CRC bytes
-        # Formula derived from original script's calculation: (payload_len + 204) - 3 // 200
-        # Let's try to make it clearer:
-        # Effective payload length considering chunk structure might be slightly different.
-        # The original formula seems specific. Let's replicate it carefully.
-        # length_calc = (payload_len + config.DATA_CHUNK_TOTAL_LENGTH) - 3 # Original: (payload_len + 204) - 3
-        # num_data_chunks = length_calc // data_per_chunk # Original: // 200
-        # Let's use a simpler ceiling division:
+        # Use ceiling division to calculate chunks
         num_data_chunks = (payload_len + data_per_chunk - 1) // data_per_chunk
         if payload_len == 0: # Handle empty payload case
              num_data_chunks = 0
@@ -131,7 +124,7 @@ class PacketBuilder:
 
         packets: List[bytes] = []
 
-        # --- Create Header Chunk ---
+        # --- Header Chunk ---
         header_chunk = bytearray(config.HEADER_LENGTH)
         header_chunk[0:2] = config.HEADER_PACKET_TYPE # FF FC
         header_chunk[2:9] = config.HEADER_TAG # "easyTag"
@@ -147,7 +140,7 @@ class PacketBuilder:
         header_chunk[16:18] = config.HEADER_BT_ID
 
         # Bytes 18-19: CRC16 of first 18 bytes
-        # CRC calculation length excludes the CRC bytes themselves
+        # CRC covers first 18 bytes
         crc_calc_len = config.HEADER_LENGTH - 2
         crc_val = self._calculate_crc16(header_chunk, crc_calc_len)
         header_chunk[18:20] = crc_val.to_bytes(2, 'big')
@@ -156,11 +149,11 @@ class PacketBuilder:
         final_header = self._apply_xor(header_chunk, mac_xor_key, secret_char_key, is_header=True)
         packets.append(final_header)
 
-        # --- Create Data Chunks ---
-        for chunk_index in range(num_data_chunks): # 0-based index for slicing
+        # --- Data Chunks ---
+        for chunk_index in range(num_data_chunks):
             data_chunk = bytearray(config.DATA_CHUNK_TOTAL_LENGTH)
 
-            # Bytes 0-1: Chunk index (1-based, Big Endian in protocol)
+            # Bytes 0-1: Chunk index (1-based, Big Endian)
             protocol_chunk_index = chunk_index + 1
             data_chunk[0:2] = protocol_chunk_index.to_bytes(2, 'big')
 
@@ -170,9 +163,9 @@ class PacketBuilder:
             chunk_payload = payload_bytes[payload_start_idx:payload_end_idx]
 
             data_chunk[2 : 2 + len(chunk_payload)] = chunk_payload
-            # Remaining bytes (if payload is shorter) are implicitly 0
+            # Remaining bytes in data_chunk are implicitly 0
 
-            # Bytes 202-203: CRC16 of first 202 bytes
+            # Bytes 202-203: CRC16
             crc_calc_len = config.DATA_CHUNK_TOTAL_LENGTH - 2
             crc_val = self._calculate_crc16(data_chunk, crc_calc_len)
             data_chunk[202:204] = crc_val.to_bytes(2, 'big')

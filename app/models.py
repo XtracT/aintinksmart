@@ -1,5 +1,5 @@
 """
-Pydantic models used by the FastAPI application.
+Pydantic models used by the BLE E-Ink Sender service.
 """
 from pydantic import BaseModel, Field, validator
 from typing import Optional, Any, List
