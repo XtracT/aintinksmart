@@ -11,8 +11,7 @@ from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.exc import BleakError
 from . import config # Use relative import within the app package
 
-# Recommended MTU for many devices, adjust if needed based on testing
-RECOMMENDED_MTU = 247
+# (MTU constant removed)
 # Small delay between packets can improve reliability on some devices
 PACKET_SEND_DELAY = 0.02 # seconds
 # Time to wait after sending all packets for device processing/notifications
@@ -62,10 +61,10 @@ class BleCommunicator:
             self._is_connected = self.client.is_connected
             if self._is_connected:
                 logging.info(f"Connected successfully to {self.address}.")
-                # Optional: Attempt MTU exchange
-                await self._try_exchange_mtu()
                 # Ensure services are discovered (good practice after connect)
-                await self.client.get_services()
+                # Access services property to ensure discovery (replaces deprecated get_services())
+                _ = self.client.services
+                logging.debug("Services discovered (implicitly or explicitly).")
             else:
                  # Should not happen if connect() doesn't raise error, but safety check
                  raise BleCommunicationError("Connection attempt finished but client is not connected.")
@@ -89,14 +88,18 @@ class BleCommunicator:
         logging.info(f"Disconnecting from {self.address}...")
         try:
             # Attempt to stop notifications gracefully first
-            try:
-                await self.client.stop_notify(config.NOTIFY_CHAR_UUID)
-                logging.debug("Stopped notifications.")
-            except BleakError as e:
-                # Log non-critical failure (e.g., if notifications weren't started)
-                logging.warning(f"Could not stop notifications during disconnect: {e}")
-            except Exception as e:
-                 logging.warning(f"Unexpected error stopping notifications: {e}")
+            # Only attempt to stop notify if still connected
+            if self.client.is_connected:
+                try:
+                    await self.client.stop_notify(config.NOTIFY_CHAR_UUID)
+                    logging.debug("Stopped notifications.")
+                except BleakError as e:
+                    # Log non-critical failure (e.g., if notifications weren't started or already disconnected)
+                    logging.warning(f"Could not stop notifications during disconnect: {e}")
+                except Exception as e:
+                     logging.warning(f"Unexpected error stopping notifications: {e}")
+            else:
+                logging.debug("Client already disconnected, skipping stop_notify.")
 
 
             await self.client.disconnect()
@@ -110,20 +113,6 @@ class BleCommunicator:
             raise BleCommunicationError(f"Unexpected disconnect error: {e}") from e
         finally:
              self._is_connected = False # Ensure state is updated even on error
-
-
-    async def _try_exchange_mtu(self):
-        """Attempts to negotiate a higher MTU for potentially faster transfers."""
-        if not self._is_connected:
-            logging.warning("Cannot exchange MTU, not connected.")
-            return
-        try:
-            mtu = await self.client.exchange_mtu(RECOMMENDED_MTU)
-            logging.info(f"Negotiated MTU: {mtu}")
-        except BleakError as e:
-            logging.warning(f"MTU exchange failed (using default): {e}")
-        except Exception as e:
-            logging.warning(f"Unexpected error during MTU exchange: {e}")
 
 
     async def send_packets(self, packets: List[bytes]):
