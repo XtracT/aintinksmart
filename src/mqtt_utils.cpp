@@ -51,16 +51,21 @@ void connectMQTT() {
 }
 
 // Helper function to extract MAC from topic
-// Topic format: eink_display/AABBCCDDEEFF/command/start
+// Topic format: aintinksmart/gateway/display/AABBCCDDEEFF/command/start
 // Returns MAC with colons, or empty string if invalid
 std::string extractMacFromTopic(const char* topic) {
     String topicStr = String(topic);
-    int firstSlash = topicStr.indexOf('/');
+    // Find the relevant slashes for the new structure
+    int firstSlash = topicStr.indexOf('/'); // after aintinksmart
     if (firstSlash == -1) return "";
-    int secondSlash = topicStr.indexOf('/', firstSlash + 1);
+    int secondSlash = topicStr.indexOf('/', firstSlash + 1); // after gateway
     if (secondSlash == -1) return "";
+    int thirdSlash = topicStr.indexOf('/', secondSlash + 1); // after display
+    if (thirdSlash == -1) return "";
+    int fourthSlash = topicStr.indexOf('/', thirdSlash + 1); // after MAC
+    if (fourthSlash == -1) return "";
 
-    String macPart = topicStr.substring(firstSlash + 1, secondSlash);
+    String macPart = topicStr.substring(thirdSlash + 1, fourthSlash);
     if (macPart.length() != 12) return ""; // Expect 12 hex chars
 
     // Reconstruct MAC with colons
@@ -85,7 +90,8 @@ std::string extractMacFromTopic(const char* topic) {
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
     payload[length] = '\0'; // Null-terminate payload
     String topicStr = String(topic);
-    bool isPacket = topicStr.endsWith("/command/packet");
+    // Check based on the new structure
+    bool isPacket = topicStr.indexOf("/display/") != -1 && topicStr.endsWith("/command/packet");
 
     // Only print the full arrival message for non-packet commands to avoid serial clutter/corruption
     if (!isPacket) {
@@ -128,7 +134,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
      }
 
 
-    if (topicStr.endsWith("/command/start")) {
+    // Check based on the new structure
+    if (topicStr.indexOf("/display/") != -1 && topicStr.endsWith("/command/start")) {
         Serial.println("Received START command.");
         if (transferInProgress) {
             if (formattedMac != currentTargetMac) {
@@ -180,7 +187,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         // connectBLE now takes the target MAC
         if (!bleConnected) connectBLE(currentTargetMac); // Pass MAC
 
-    } else if (topicStr.endsWith("/command/packet")) {
+    // Check based on the new structure
+    } else if (isPacket) { // Reuse the check from above
         if (!transferInProgress || formattedMac != currentTargetMac) {
             Serial.println(" -> Warning: Received 'packet' for inactive/wrong transfer. Ignoring.");
             return;
@@ -199,7 +207,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
              publishStatus("error_packet_format", currentTargetMac); // Use the currently active MAC
         }
 
-    } else if (topicStr.endsWith("/command/end")) {
+    // Check based on the new structure
+    } else if (topicStr.indexOf("/display/") != -1 && topicStr.endsWith("/command/end")) {
         if (!transferInProgress || formattedMac != currentTargetMac) {
             Serial.println(" -> Warning: Received 'end' for inactive/wrong transfer. Ignoring.");
             return;
@@ -229,11 +238,11 @@ void publishStatus(const char* status, const std::string& targetMac) {
     if (!targetMac.empty()) {
         String macPart = targetMac.c_str();
         macPart.replace(":", ""); // Remove colons for topic
-        topic = MQTT_STATUS_TOPIC_BASE + macPart + "/status";
+        // Use base topic constant defined in globals.cpp
+        topic = MQTT_DISPLAY_STATUS_TOPIC_BASE + macPart + "/status";
     } else {
-        // For generic statuses like initial 'idle', maybe publish to a general topic?
-        // Or just log locally? Let's publish to a base status topic for now.
-        topic = MQTT_STATUS_TOPIC_BASE + "bridge/status"; // e.g., eink_display/bridge/status
+        // Use bridge status topic constant defined in globals.cpp
+        topic = MQTT_BRIDGE_STATUS_TOPIC;
         Serial.print("(Publishing general status) ");
     }
 

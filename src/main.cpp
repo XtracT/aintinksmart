@@ -27,19 +27,21 @@ void setup() {
     String mac = WiFi.macAddress();
     mac.replace(":", "");
     MQTT_CLIENT_ID += mac;
-    // Initialize MQTT topics (using constants from config.h)
-    MQTT_START_TOPIC = MQTT_COMMAND_TOPIC_BASE + "+/command/start";
-    MQTT_PACKET_TOPIC = MQTT_COMMAND_TOPIC_BASE + "+/command/packet";
-    MQTT_END_TOPIC = MQTT_COMMAND_TOPIC_BASE + "+/command/end";
-    MQTT_SCAN_COMMAND_TOPIC = MQTT_COMMAND_TOPIC_BASE + "scan/command";
-    MQTT_SCAN_RESULT_TOPIC = MQTT_STATUS_TOPIC_BASE + "scan/result";
+    // MQTT Topics are now defined directly in globals.cpp
 
     Serial.print("MQTT Client ID: "); Serial.println(MQTT_CLIENT_ID);
     // Log base topics, specific topics are now dynamic or used internally
-    Serial.print("MQTT Command Topic Base: "); Serial.println(MQTT_COMMAND_TOPIC_BASE);
-    Serial.print("MQTT Status Topic Base: "); Serial.println(MQTT_STATUS_TOPIC_BASE);
-    Serial.print("MQTT Scan Command Topic: "); Serial.println(MQTT_SCAN_COMMAND_TOPIC);
-    Serial.print("MQTT Scan Result Topic: "); Serial.println(MQTT_SCAN_RESULT_TOPIC);
+    // Log the defined topics
+    Serial.print("MQTT Gateway Base Topic: "); Serial.println(MQTT_GATEWAY_BASE_TOPIC);
+    Serial.println("Subscribing to:");
+    Serial.print(" - Start: "); Serial.println(MQTT_START_TOPIC);
+    Serial.print(" - Packet: "); Serial.println(MQTT_PACKET_TOPIC);
+    Serial.print(" - End: "); Serial.println(MQTT_END_TOPIC);
+    Serial.print(" - Scan Cmd: "); Serial.println(MQTT_SCAN_COMMAND_TOPIC);
+    Serial.println("Publishing to:");
+    Serial.print(" - Display Status Base: "); Serial.println(MQTT_DISPLAY_STATUS_TOPIC_BASE);
+    Serial.print(" - Bridge Status: "); Serial.println(MQTT_BRIDGE_STATUS_TOPIC);
+    Serial.print(" - Scan Result: "); Serial.println(MQTT_SCAN_RESULT_TOPIC);
 
     connectWiFi();
     mqttClient.setServer(MQTT_BROKER, MQTT_PORT);

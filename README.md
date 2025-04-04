@@ -43,10 +43,10 @@ The service is configured using environment variables when running the Docker co
 *   `MQTT_PORT` (Optional): Port of the MQTT broker (default: `1883`).
 *   `MQTT_USERNAME` (Optional): Username for MQTT authentication.
 *   `MQTT_PASSWORD` (Optional): Password for MQTT authentication.
-*   `MQTT_REQUEST_TOPIC` (Optional): The MQTT topic the service listens on for incoming image send requests (default: `eink_sender/request/send_image`).
-*   `MQTT_SCAN_REQUEST_TOPIC` (Optional): The MQTT topic the service listens on for incoming scan requests (default: `eink_sender/request/scan`).
-*   `MQTT_DEFAULT_STATUS_TOPIC` (Optional): The MQTT topic the service publishes intermediate status updates to (default: `eink_sender/status/default`).
-*   `MQTT_EINK_TOPIC_BASE` (Optional, for MQTT Gateway Mode): Base topic used for communicating with the custom ESP32 firmware (default: `eink_display`). Commands are sent to `{MQTT_EINK_TOPIC_BASE}/{MAC_NO_COLONS}/command/{start|packet|end}` and scan commands to `{MQTT_EINK_TOPIC_BASE}/scan/command`.
+*   `MQTT_REQUEST_TOPIC` (Optional): Topic for image send requests (default: `aintinksmart/service/request/send_image`).
+*   `MQTT_SCAN_REQUEST_TOPIC` (Optional): Topic for scan requests (default: `aintinksmart/service/request/scan`).
+*   `MQTT_DEFAULT_STATUS_TOPIC` (Optional): Topic for service status updates and direct BLE scan results (default: `aintinksmart/service/status/default`).
+*   `MQTT_GATEWAY_BASE_TOPIC` (Optional, for MQTT Gateway Mode): Base topic for communicating with the ESP32 gateway (default: `aintinksmart/gateway`). Commands are sent to `{MQTT_GATEWAY_BASE_TOPIC}/display/{MAC_NO_COLONS}/command/...` and scan commands to `{MQTT_GATEWAY_BASE_TOPIC}/bridge/command/scan`. Gateway status/results are published under this base (see `mqtt_topics.md`).
 *   `EINK_PACKET_DELAY_MS` (Optional, for MQTT Gateway Mode): Delay in milliseconds between sending individual packet messages via MQTT to the custom firmware. Defaults to `20`.
 
 **Note:** The service will exit on startup if a valid operating mode cannot be determined (e.g., `USE_GATEWAY=true` but `MQTT_BROKER` is not set, or `USE_GATEWAY=false` and `BLE_ENABLED=false`).
@@ -70,7 +70,7 @@ The service is configured using environment variables when running the Docker co
           # -e MQTT_REQUEST_TOPIC=custom/request/topic # Optional
           # -e MQTT_SCAN_REQUEST_TOPIC=custom/scan/topic # Optional
           # -e MQTT_DEFAULT_STATUS_TOPIC=custom/status/topic # Optional
-          # -e MQTT_EINK_TOPIC_BASE=custom/eink/base # Optional
+          # -e MQTT_GATEWAY_BASE_TOPIC=custom/gateway # Optional
           ble-sender-service
         ```
 
@@ -95,7 +95,7 @@ The service is configured using environment variables when running the Docker co
 ### 1. Sending an Image
 
 *   **Via MQTT:**
-    Publish a JSON payload to the configured `MQTT_REQUEST_TOPIC` (default: `eink_sender/request/send_image`).
+    Publish a JSON payload to the configured `MQTT_REQUEST_TOPIC` (default: `aintinksmart/service/request/send_image`).
     ```json
     {
       "mac_address": "AA:BB:CC:DD:EE:FF",
@@ -104,7 +104,7 @@ The service is configured using environment variables when running the Docker co
       "response_topic": "optional/topic/for/result" // Optional
     }
     ```
-    Monitor the `MQTT_DEFAULT_STATUS_TOPIC` (default: `eink_sender/status/default`) for intermediate status updates (JSON payload: `{"mac_address": "...", "status": "...", ...}`).
+    Monitor the `MQTT_DEFAULT_STATUS_TOPIC` (default: `aintinksmart/service/status/default`) for intermediate status updates (JSON payload: `{"mac_address": "...", "status": "...", ...}`).
     If `response_topic` is provided, monitor it for the final JSON result message.
 
 *   **Via CLI Script (`send_image_cli.py`):**
@@ -118,7 +118,7 @@ The service is configured using environment variables when running the Docker co
       --image /path/to/your/image.png \
       --mode bwr \
       --response-topic sender/result # Optional: wait for specific final result
-      # --default-status-topic custom/status # Optional
+      # --default-status-topic aintinksmart/service/status/custom # Optional
       # --timeout 60 # Optional: seconds to wait for status/response
     ```
     The script automatically subscribes to the default status topic and prints updates for the target MAC address. If `--response-topic` is given, it waits for a message on that topic or until the timeout. Use `python send_image_cli.py --help` for all options.
@@ -126,7 +126,7 @@ The service is configured using environment variables when running the Docker co
 ### 2. Scanning for Devices
 
 *   **Via MQTT:**
-    Publish a JSON payload to the configured `MQTT_SCAN_REQUEST_TOPIC` (default: `eink_sender/request/scan`).
+    Publish a JSON payload to the configured `MQTT_SCAN_REQUEST_TOPIC` (default: `aintinksmart/service/request/scan`).
     ```json
     {
       "action": "scan",
@@ -134,8 +134,8 @@ The service is configured using environment variables when running the Docker co
     }
     ```
     If `response_topic` is provided:
-    *   In Direct BLE mode, monitor it for a JSON result: `{"status": "success", "method": "ble", "devices": [{"name": ..., "address": ...}, ...]}`
-    *   In MQTT Gateway mode, monitor it for a confirmation: `{"status": "success", "method": "mqtt", "message": "Gateway scan triggered..."}`. You must *also* separately monitor the gateway's result topic (default: `eink_display/scan/result`) for the actual devices found by the ESP32.
+    *   In Direct BLE mode, monitor the `MQTT_DEFAULT_STATUS_TOPIC` (default: `aintinksmart/service/status/default`) for a JSON result: `{"status": "success", "method": "ble", "devices": [...]}`.
+    *   In MQTT Gateway mode, monitor the `response_topic` (if provided) for a confirmation: `{"status": "success", "method": "mqtt", ...}`. You must *also* separately monitor the gateway's result topic (default: `aintinksmart/gateway/bridge/scan_result`) for the actual devices found by the ESP32.
 
 *   **Via CLI Script (`scan_ble_cli.py`):**
     (Requires Python and `paho-mqtt` installed locally: `pip install paho-mqtt`)
@@ -146,7 +146,7 @@ The service is configured using environment variables when running the Docker co
       --pass <your_mqtt_pass> \
       --timeout 20 # Optional: seconds to wait
     ```
-    This script automatically subscribes to both the service response topic and the default gateway result topic, publishing the scan request and printing any discovered devices received on either topic within the timeout. Use `python scan_ble_cli.py --help` for all options.
+    This script automatically subscribes to the service status topic (`--service-status-topic`) and the gateway result topic (`--gateway-result-topic`), publishing the scan request and printing any discovered devices received on either topic within the timeout. Use `python scan_ble_cli.py --help` for all options.
 
 ## Custom ESP32 Firmware (MQTT Gateway Mode)
 
@@ -156,11 +156,12 @@ The MQTT functionality relies on the custom ESP32 firmware located in the `src/`
 
 **Functionality:**
 *   Connects to WiFi and MQTT broker.
-*   Subscribes to command topics: `{base}/+/command/start`, `{base}/+/command/packet`, `{base}/+/command/end`.
-*   Subscribes to scan command topic: `{base}/scan/command`.
+*   Subscribes to display command topics: `{base}/display/+/command/start`, `.../packet`, `.../end`.
+*   Subscribes to bridge scan command topic: `{base}/bridge/command/scan`.
 *   Handles image transfer commands.
-*   Publishes status updates to `{base}/{MAC_NO_COLONS}/status`.
-*   On receiving message on `{base}/scan/command`, performs BLE scan and publishes results to `{base}/scan/result`.
+*   Publishes display status updates to `{base}/display/{MAC_NO_COLONS}/status`.
+*   Publishes bridge status updates to `{base}/bridge/status`.
+*   On receiving message on `{base}/bridge/command/scan`, performs BLE scan and publishes results to `{base}/bridge/scan_result`.
 
 **Setup:**
 1.  Configure `src/config.h`.
@@ -177,7 +178,7 @@ The MQTT functionality relies on the custom ESP32 firmware located in the `src/`
 ## Troubleshooting
 
 *   **Docker Build/Run Issues:** Check environment variables, BLE access permissions if using Direct BLE mode. Ensure correct operating mode is selected via `USE_GATEWAY` and `BLE_ENABLED`.
-*   **MQTT Issues:** Verify broker details. Check request topics (`MQTT_REQUEST_TOPIC`, `MQTT_SCAN_REQUEST_TOPIC`) and status topic (`MQTT_DEFAULT_STATUS_TOPIC`). If using Gateway Mode, check `MQTT_EINK_TOPIC_BASE`. Use an MQTT client to monitor topics. Check service logs.
+*   **MQTT Issues:** Verify broker details. Check service request topics (`MQTT_REQUEST_TOPIC`, `MQTT_SCAN_REQUEST_TOPIC`) and status topic (`MQTT_DEFAULT_STATUS_TOPIC`). If using Gateway Mode, check `MQTT_GATEWAY_BASE_TOPIC`. Use an MQTT client (like `mqttx` or `mosquitto_sub`) to monitor topics. Check service logs.
 *   **BLE Issues (Direct or Gateway):** Ensure display is powered, in range. Double-check MAC address. Check service logs for `BleakError`. Check ESP32 serial monitor output if using Gateway Mode.
 *   **Image Appearance:** Ensure correct `mode` ("bw" or "bwr") is specified.
 

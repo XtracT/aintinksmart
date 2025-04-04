@@ -8,9 +8,12 @@ import threading
 # --- Configuration ---
 DEFAULT_BROKER = "localhost"
 DEFAULT_PORT = 1883
-DEFAULT_REQUEST_TOPIC = "eink_sender/request/scan"
-DEFAULT_RESULT_TOPIC = "eink_sender/scan/result" # Topic for results from service (Direct BLE mode)
-DEFAULT_GATEWAY_RESULT_TOPIC = "eink_display/scan/result" # Topic for results from ESP32 (Gateway mode)
+DEFAULT_REQUEST_TOPIC = "aintinksmart/service/request/scan"
+# The service now publishes results (including direct BLE) to the default status topic
+# We still need a topic for the *gateway's* scan results
+DEFAULT_GATEWAY_RESULT_TOPIC = "aintinksmart/gateway/bridge/scan_result"
+# We'll also listen on the service's default status topic for direct BLE results or errors
+DEFAULT_SERVICE_STATUS_TOPIC = "aintinksmart/service/status/default"
 DEFAULT_TIMEOUT = 20 # seconds
 
 # --- Global Variables ---
@@ -22,14 +25,17 @@ stop_event = threading.Event()
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
         print("CLI: Connected to MQTT Broker!")
-        # Subscribe to both potential result topics
-        result_topic = userdata['result_topic']
+        # Subscribe to the service status topic and the gateway result topic
+        service_status_topic = userdata['service_status_topic']
         gateway_result_topic = userdata['gateway_result_topic']
-        client.subscribe([(result_topic, 0), (gateway_result_topic, 0)])
-        print(f"CLI: Subscribed to {result_topic} and {gateway_result_topic}")
+        client.subscribe([(service_status_topic, 0), (gateway_result_topic, 0)])
+        print(f"CLI: Subscribed to {service_status_topic} and {gateway_result_topic}")
         # Publish the scan request after successful connection and subscription
+        # Include response_topic so service knows where to send final confirmation/error if needed
+        # (though results for direct BLE now come via status topic)
         request_topic = userdata['request_topic']
-        payload = json.dumps({"action": "scan", "response_topic": result_topic})
+        # Use service_status_topic as the nominal response topic for service confirmation/errors
+        payload = json.dumps({"action": "scan", "response_topic": service_status_topic})
         print(f"CLI: Publishing scan request to {request_topic}")
         client.publish(request_topic, payload=payload, qos=1)
     else:
@@ -41,21 +47,29 @@ def on_message(client, userdata, msg):
     print(f"CLI: Received message on {msg.topic}")
     try:
         payload_data = json.loads(msg.payload.decode())
-        # Handle results from the service (Direct BLE)
-        if msg.topic == userdata['result_topic']:
-            if payload_data.get("status") == "success" and payload_data.get("method") == "ble":
+        # Handle messages from the service status topic
+        if msg.topic == userdata['service_status_topic']:
+            # Check if it's a successful BLE scan result
+            if payload_data.get("status") == "success" and payload_data.get("method") == "ble" and "devices" in payload_data:
                 devices = payload_data.get("devices", [])
                 print(f"CLI: Received {len(devices)} device(s) from service (Direct BLE Scan):")
                 with message_lock:
-                    found_devices.extend(devices) # Assuming list format
+                    # Add devices, avoiding duplicates based on address
+                    for dev in devices:
+                        if not any(d.get("address") == dev.get("address") for d in found_devices):
+                            found_devices.append(dev)
+                # Consider stopping here for direct BLE scan? Or wait for timeout? Let's wait for timeout for now.
+            # Check if it's a confirmation of gateway trigger
             elif payload_data.get("status") == "success" and payload_data.get("method") == "mqtt":
                  print(f"CLI: Service confirmed MQTT Gateway scan triggered. Listening on {userdata['gateway_result_topic']}...")
-                 # We are already subscribed, just wait
+                 # We are already subscribed, just wait for gateway results
+            # Check if it's an error message from the service
             elif payload_data.get("status") == "error":
                  print(f"CLI: Service reported error: {payload_data.get('message', 'Unknown error')}")
                  stop_event.set() # Stop on error from service
-            else:
-                 print(f"CLI: Received unexpected response from service: {payload_data}")
+            # Ignore other intermediate status messages from the service on this topic
+            # else:
+            #     print(f"CLI: Ignoring intermediate status from service: {payload_data.get('status')}")
 
         # Handle results directly from the gateway
         elif msg.topic == userdata['gateway_result_topic']:
@@ -86,14 +100,15 @@ if __name__ == "__main__":
     parser.add_argument("--user", default=None, help="MQTT username")
     parser.add_argument("--pass", default=None, help="MQTT password", dest='password')
     parser.add_argument("--request-topic", default=DEFAULT_REQUEST_TOPIC, help=f"MQTT topic to send scan request (default: {DEFAULT_REQUEST_TOPIC})")
-    parser.add_argument("--result-topic", default=DEFAULT_RESULT_TOPIC, help=f"MQTT topic to listen for service results (default: {DEFAULT_RESULT_TOPIC})")
-    parser.add_argument("--gateway-result-topic", default=DEFAULT_GATEWAY_RESULT_TOPIC, help=f"MQTT topic to listen for gateway results (default: {DEFAULT_GATEWAY_RESULT_TOPIC})")
+    # Remove --result-topic as direct results now come via status topic
+    parser.add_argument("--service-status-topic", default=DEFAULT_SERVICE_STATUS_TOPIC, help=f"MQTT topic for service status/results (default: {DEFAULT_SERVICE_STATUS_TOPIC})")
+    parser.add_argument("--gateway-result-topic", default=DEFAULT_GATEWAY_RESULT_TOPIC, help=f"MQTT topic to listen for gateway scan results (default: {DEFAULT_GATEWAY_RESULT_TOPIC})")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT, help=f"Seconds to wait for results (default: {DEFAULT_TIMEOUT})")
 
     args = parser.parse_args()
 
     userdata = {
-        'result_topic': args.result_topic,
+        'service_status_topic': args.service_status_topic, # Use the new argument
         'gateway_result_topic': args.gateway_result_topic,
         'request_topic': args.request_topic
     }

@@ -85,7 +85,8 @@ void performBleScanAndReport() {
                 Serial.printf("Found EasyTag Device: Name: %s, Address: %s\n", devName.c_str(), mac.c_str());
 
                 // Prepare JSON payload
-                StaticJsonDocument<200> doc; // Adjust size as needed
+                // Use JsonDocument instead of deprecated StaticJsonDocument
+                JsonDocument doc; // Dynamically allocates memory
                 doc["name"] = devName;
                 doc["address"] = mac;
 

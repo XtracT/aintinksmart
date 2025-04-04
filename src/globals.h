@@ -17,13 +17,18 @@ class ScanCallbacks;
 extern WiFiClient wifiClient;
 extern PubSubClient mqttClient;
 
-// MQTT Topics (Initialized in setup)
-extern String MQTT_CLIENT_ID;
+// MQTT Topics (Defined in globals.cpp)
+extern String MQTT_CLIENT_ID; // Prefix, completed in setup()
+extern const String MQTT_GATEWAY_BASE_TOPIC; // Declare the base topic constant
+// Subscription Topics
 extern String MQTT_START_TOPIC;
 extern String MQTT_PACKET_TOPIC;
 extern String MQTT_END_TOPIC;
 extern String MQTT_SCAN_COMMAND_TOPIC;
-extern String MQTT_SCAN_RESULT_TOPIC;
+// Publish Topics
+extern String MQTT_DISPLAY_STATUS_TOPIC_BASE; // Base for display status
+extern String MQTT_BRIDGE_STATUS_TOPIC;       // Topic for bridge status
+extern String MQTT_SCAN_RESULT_TOPIC;         // Topic for scan results
 
 // BLE UUIDs
 extern NimBLEUUID serviceUUID;

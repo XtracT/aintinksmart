@@ -7,8 +7,9 @@ const char* WIFI_PASSWORD = "This is WiFi PassWord";
 const char* MQTT_BROKER = "192.168.1.118";
 const char* MQTT_USER = "";
 const char* MQTT_PASSWORD = "";
-const String MQTT_COMMAND_TOPIC_BASE = "eink_display/";
-const String MQTT_STATUS_TOPIC_BASE = "eink_display/";
+// Define the new base topic for gateway communication
+const String MQTT_GATEWAY_BASE_TOPIC = "aintinksmart/gateway/";
+// Base topic is defined, specific topics constructed below
 const char* BLE_SERVICE_UUID_STR = "00001523-1212-efde-1523-785feabcd123";
 const char* BLE_CHARACTERISTIC_UUID_STR = "00001525-1212-efde-1523-785feabcd123";
 
@@ -18,13 +19,17 @@ const char* BLE_CHARACTERISTIC_UUID_STR = "00001525-1212-efde-1523-785feabcd123"
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
 
-// MQTT Topics (Initialized in setup)
-String MQTT_CLIENT_ID = "esp32-eink-bridge-"; // Default prefix
-String MQTT_START_TOPIC = "";
-String MQTT_PACKET_TOPIC = "";
-String MQTT_END_TOPIC = "";
-String MQTT_SCAN_COMMAND_TOPIC = "";
-String MQTT_SCAN_RESULT_TOPIC = "";
+// MQTT Topics (Defined directly here)
+String MQTT_CLIENT_ID = "esp32-eink-bridge-"; // Default prefix, will be appended in setup()
+// Subscription Topics (using wildcards where appropriate)
+String MQTT_START_TOPIC = MQTT_GATEWAY_BASE_TOPIC + "display/+/command/start";
+String MQTT_PACKET_TOPIC = MQTT_GATEWAY_BASE_TOPIC + "display/+/command/packet";
+String MQTT_END_TOPIC = MQTT_GATEWAY_BASE_TOPIC + "display/+/command/end";
+String MQTT_SCAN_COMMAND_TOPIC = MQTT_GATEWAY_BASE_TOPIC + "bridge/command/scan";
+// Publish Topics (Base for dynamic construction or specific topics)
+String MQTT_DISPLAY_STATUS_TOPIC_BASE = MQTT_GATEWAY_BASE_TOPIC + "display/"; // Needs /{MAC}/status appended
+String MQTT_BRIDGE_STATUS_TOPIC = MQTT_GATEWAY_BASE_TOPIC + "bridge/status";
+String MQTT_SCAN_RESULT_TOPIC = MQTT_GATEWAY_BASE_TOPIC + "bridge/scan_result";
 
 // BLE UUIDs (Initialized in setup or globally if constant)
 NimBLEUUID serviceUUID;

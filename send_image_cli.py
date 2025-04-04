@@ -9,8 +9,8 @@ import threading
 # --- Configuration ---
 DEFAULT_BROKER = "localhost"
 DEFAULT_PORT = 1883
-DEFAULT_REQUEST_TOPIC = "eink_sender/request/send_image"
-DEFAULT_STATUS_TOPIC = "eink_sender/status/default" # Default status topic
+DEFAULT_REQUEST_TOPIC = "aintinksmart/service/request/send_image"
+DEFAULT_STATUS_TOPIC = "aintinksmart/service/status/default" # Default status topic
 DEFAULT_MODE = "bwr"
 DEFAULT_TIMEOUT = 60 # Default seconds to wait for status/response
 

@@ -33,11 +33,14 @@ MQTT_BROKER = os.getenv("MQTT_BROKER")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 MQTT_USERNAME = os.getenv("MQTT_USERNAME")
 MQTT_PASSWORD = os.getenv("MQTT_PASSWORD")
-MQTT_EINK_TOPIC_BASE = os.getenv("MQTT_EINK_TOPIC_BASE", "eink_display")
-MQTT_REQUEST_TOPIC = os.getenv("MQTT_REQUEST_TOPIC", "eink_sender/request/send_image")
-MQTT_SCAN_REQUEST_TOPIC = os.getenv("MQTT_SCAN_REQUEST_TOPIC", "eink_sender/request/scan") # New topic for scan requests
+# New unified base topic for gateway communication
+MQTT_GATEWAY_BASE_TOPIC = os.getenv("MQTT_GATEWAY_BASE_TOPIC", "aintinksmart/gateway")
+# Service-specific topics
+MQTT_REQUEST_TOPIC = os.getenv("MQTT_REQUEST_TOPIC", "aintinksmart/service/request/send_image")
+MQTT_SCAN_REQUEST_TOPIC = os.getenv("MQTT_SCAN_REQUEST_TOPIC", "aintinksmart/service/request/scan")
+MQTT_DEFAULT_STATUS_TOPIC = os.getenv("MQTT_DEFAULT_STATUS_TOPIC", "aintinksmart/service/status/default")
+# Other config
 EINK_PACKET_DELAY_MS = int(os.getenv("EINK_PACKET_DELAY_MS", "20"))
-MQTT_DEFAULT_STATUS_TOPIC = os.getenv("MQTT_DEFAULT_STATUS_TOPIC", "eink_sender/status/default") # Default status topic
 # MQTT_STATUS_TIMEOUT_SEC = int(os.getenv("MQTT_STATUS_TIMEOUT_SEC", "60")) # Timeout not directly used here
 
 # Determine operating mode
@@ -94,13 +97,15 @@ async def attempt_direct_ble(client: aiomqtt.Client, mac_address: str, packets_b
          return {"status": "error", "method": "ble", "message": f"Unexpected BLE error: {e}"}
          return {"status": "error", "method": "ble", "message": f"Unexpected BLE error: {e}"}
 
-async def attempt_mqtt_publish(client: aiomqtt.Client, mac_address: str, packets_bytes_list: List[bytes], base_topic: str, delay_ms: int) -> Dict[str, Any]:
+# base_topic is now MQTT_GATEWAY_BASE_TOPIC
+async def attempt_mqtt_publish(client: aiomqtt.Client, mac_address: str, packets_bytes_list: List[bytes], gateway_base_topic: str, delay_ms: int) -> Dict[str, Any]:
     """Publishes the command sequence via MQTT."""
     logger.info(f"Attempting MQTT publish to gateway for {mac_address}...")
     mac_topic_part = mac_address.replace(":", "")
-    start_topic = f"{base_topic}/{mac_topic_part}/command/start"
-    packet_topic = f"{base_topic}/{mac_topic_part}/command/packet"
-    end_topic = f"{base_topic}/{mac_topic_part}/command/end"
+    # Construct topics using the new structure: aintinksmart/gateway/display/{MAC}/command/...
+    start_topic = f"{gateway_base_topic}/display/{mac_topic_part}/command/start"
+    packet_topic = f"{gateway_base_topic}/display/{mac_topic_part}/command/packet"
+    end_topic = f"{gateway_base_topic}/display/{mac_topic_part}/command/end"
     delay_sec = delay_ms / 1000.0
 
     try:
@@ -202,7 +207,7 @@ async def process_request(client: aiomqtt.Client, payload_str: str):
             result_payload = await attempt_direct_ble(client, mac_address, packets_bytes_list)
         elif OPERATING_MODE == 'mqtt':
             await publish_status(client, mac_address, "publishing_mqtt")
-            result_payload = await attempt_mqtt_publish(client, mac_address, packets_bytes_list, MQTT_EINK_TOPIC_BASE, EINK_PACKET_DELAY_MS)
+            result_payload = await attempt_mqtt_publish(client, mac_address, packets_bytes_list, MQTT_GATEWAY_BASE_TOPIC, EINK_PACKET_DELAY_MS)
         else:
              # Should not happen due to startup check, but handle defensively
              result_payload = {"status": "error", "message": "Service operating mode not configured."}
@@ -270,8 +275,9 @@ async def process_scan_request(client: aiomqtt.Client, payload_str: str):
 
         elif OPERATING_MODE == 'mqtt':
             logger.info("Triggering MQTT gateway scan...")
-            gateway_scan_topic = f"{MQTT_EINK_TOPIC_BASE}/scan/command"
-            gateway_result_topic = f"{MQTT_EINK_TOPIC_BASE}/scan/result"
+            # Use new gateway base topic: aintinksmart/gateway/bridge/...
+            gateway_scan_topic = f"{MQTT_GATEWAY_BASE_TOPIC}/bridge/command/scan"
+            gateway_result_topic = f"{MQTT_GATEWAY_BASE_TOPIC}/bridge/scan_result"
             try:
                 await client.publish(gateway_scan_topic, payload="", qos=0)
                 logger.info(f"Published scan command to {gateway_scan_topic}")
