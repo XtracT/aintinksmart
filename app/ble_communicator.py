@@ -9,9 +9,9 @@ from typing import List
 from bleak import BleakClient
 from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.exc import BleakError
-from . import config # Use relative import within the app package
+from . import config
 
-# (MTU constant removed)
+# Constants
 # Small delay between packets can improve reliability on some devices
 PACKET_SEND_DELAY = 0.02 # seconds
 # Time to wait after sending all packets for device processing/notifications
@@ -38,56 +38,46 @@ class BleCommunicator:
             raise ValueError("BLE address cannot be empty.")
         self.address = ble_address
         self.client = BleakClient(self.address, timeout=CONNECTION_TIMEOUT)
-        self._is_connected = False # Internal state tracking
 
     @staticmethod
     def _notification_handler(characteristic: BleakGATTCharacteristic, data: bytearray):
         """Static method to handle incoming BLE notifications."""
-        # Keep this simple for now, just log the notification
         logging.info(f"Notification - Handle 0x{characteristic.handle:04X}: {data.hex()}")
-        # In a more complex app, this could update state or trigger events.
 
     async def connect(self):
         """Establishes connection to the BLE device."""
-        if self._is_connected:
+        if self.client.is_connected:
             logging.warning(f"Already connected to {self.address}.")
             return
-        if not self.client:
-             self.client = BleakClient(self.address, timeout=CONNECTION_TIMEOUT)
 
         logging.info(f"Attempting to connect to {self.address}...")
         try:
             await self.client.connect()
-            self._is_connected = self.client.is_connected
-            if self._is_connected:
+            if self.client.is_connected:
                 logging.info(f"Connected successfully to {self.address}.")
                 # Ensure services are discovered (good practice after connect)
                 # Access services property to ensure discovery (replaces deprecated get_services())
                 _ = self.client.services
                 logging.debug("Services discovered (implicitly or explicitly).")
             else:
-                 # Should not happen if connect() doesn't raise error, but safety check
+                 # Safety check in case connect() doesn't raise but fails
                  raise BleCommunicationError("Connection attempt finished but client is not connected.")
 
         except BleakError as e:
             logging.error(f"BleakError connecting to {self.address}: {e}")
-            self._is_connected = False
             raise BleCommunicationError(f"Failed to connect: {e}") from e
         except Exception as e:
             logging.error(f"Unexpected error connecting to {self.address}: {e}")
-            self._is_connected = False
             raise BleCommunicationError(f"Unexpected connection error: {e}") from e
 
     async def disconnect(self):
         """Disconnects from the BLE device."""
-        if not self.client or not self._is_connected:
+        if not self.client.is_connected:
             logging.warning(f"Not connected to {self.address}, cannot disconnect.")
-            self._is_connected = False # Ensure state is correct
             return
 
         logging.info(f"Disconnecting from {self.address}...")
         try:
-            # Attempt to stop notifications gracefully first
             # Only attempt to stop notify if still connected
             if self.client.is_connected:
                 try:
@@ -106,13 +96,10 @@ class BleCommunicator:
             logging.info(f"Disconnected from {self.address}.")
         except BleakError as e:
             logging.error(f"BleakError during disconnect: {e}")
-            # Still raise, as disconnect failed
             raise BleCommunicationError(f"Failed to disconnect cleanly: {e}") from e
         except Exception as e:
             logging.error(f"Unexpected error during disconnect: {e}")
             raise BleCommunicationError(f"Unexpected disconnect error: {e}") from e
-        finally:
-             self._is_connected = False # Ensure state is updated even on error
 
 
     async def send_packets(self, packets: List[bytes]):
@@ -126,34 +113,30 @@ class BleCommunicator:
         Raises:
             BleCommunicationError: If not connected or if sending fails.
         """
-        if not self._is_connected:
+        if not self.client.is_connected:
             raise BleCommunicationError("Cannot send packets, not connected.")
         if not packets:
             logging.warning("No packets provided to send.")
             return
 
-        # Start notifications before sending data
         logging.info(f"Starting notifications on {config.NOTIFY_CHAR_UUID}")
         try:
             await self.client.start_notify(config.NOTIFY_CHAR_UUID, self._notification_handler)
             logging.debug("Notifications started.")
         except BleakError as e:
             logging.error(f"Failed to start notifications: {e}")
-            # Decide whether to proceed without notifications or raise error
             raise BleCommunicationError(f"Failed to start notifications: {e}") from e
         except Exception as e:
              logging.error(f"Unexpected error starting notifications: {e}")
              raise BleCommunicationError(f"Unexpected error starting notifications: {e}") from e
 
 
-        # Send packets
         logging.info(f"Sending {len(packets)} data packets...")
         total_packets = len(packets)
         for i, pkt in enumerate(packets):
             logging.debug(f"Sending packet {i+1}/{total_packets}, {len(pkt)} bytes...")
             try:
                 await self.client.write_gatt_char(config.IMG_CHAR_UUID, pkt, response=False)
-                # Small delay can improve reliability
                 if PACKET_SEND_DELAY > 0:
                     await asyncio.sleep(PACKET_SEND_DELAY)
             except BleakError as e:
