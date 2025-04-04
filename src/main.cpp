@@ -94,7 +94,8 @@ void loop() {
                     disconnectBLE(true); // Force disconnect state cleanup (ble_utils.cpp)
                     return;
                 } else {
-                    Serial.println("Retrying in 5s...");
+                    Serial.println("Publishing retry status and retrying in 5s...");
+                    publishStatus("retrying_ble_connect", currentTargetMac); // Publish retry status
                     delay(5000);
                     mqttClient.loop(); // Allow MQTT processing during delay
                     return; // Skip rest of loop iteration

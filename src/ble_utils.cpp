@@ -40,7 +40,7 @@ bool connectBLE(const std::string& targetMac) {
     if (!pClient->connect(currentTargetAddress, false)) { // address, is_initiator (use default timeout)
         Serial.println("Connection failed");
         // Don't delete client here, allow retry in main loop
-        publishStatus("error_ble_connect", targetMac); // Pass MAC to status
+        // publishStatus("error_ble_connect", targetMac); // Removed - Status handled by retry logic in main loop
         return false;
     }
     Serial.println("BLE Connected!");
