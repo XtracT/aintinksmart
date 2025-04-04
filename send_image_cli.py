@@ -20,7 +20,8 @@ response_lock = threading.Lock()
 stop_event = threading.Event()
 
 # --- MQTT Callbacks ---
-def on_connect(client, userdata, flags, rc):
+# Add properties argument for CallbackAPIVersion.VERSION2
+def on_connect(client, userdata, flags, rc, properties=None):
     if rc == 0:
         print("CLI: Connected to MQTT Broker!")
         # Subscribe to response topic if provided
@@ -96,7 +97,9 @@ def on_message(client, userdata, msg):
     except Exception as e:
         print(f"CLI: Error processing message on {msg.topic}: {e}")
 
-def on_disconnect(client, userdata, rc):
+# Update signature for CallbackAPIVersion.VERSION2
+# Correct signature for CallbackAPIVersion.VERSION2
+def on_disconnect(client, userdata, disconnect_flags, reason_code, properties=None):
     print("CLI: Disconnected from MQTT Broker.")
     stop_event.set() # Ensure exit if disconnected unexpectedly
 
@@ -149,7 +152,7 @@ if __name__ == "__main__":
     }
 
     # Use latest Callback API version to avoid DeprecationWarning
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, userdata=userdata)
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, userdata=userdata)
     client.on_connect = on_connect
     client.on_message = on_message
     client.on_disconnect = on_disconnect
