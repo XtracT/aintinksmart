@@ -19,6 +19,5 @@ public:
 extern ScanCallbacks scanCallbacks;
 
 void performBleScanAndReport();
-// void scanEndedCB(NimBLEScanResults results); // Removed - using class methods instead
 
 #endif // SCAN_UTILS_H

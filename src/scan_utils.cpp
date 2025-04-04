@@ -7,11 +7,9 @@
 #include "mqtt_utils.h" // For publishStatus
 #include "scan_utils.h"
 
-// --- BLE Scan Callback Instance ---
 // Class definition is now in scan_utils.h
 ScanCallbacks scanCallbacks; // Define the global instance (already declared in globals.h)
 
-// --- ScanCallbacks Method Implementations ---
 
 // Called for each advertising packet received. - Not used with blocking getResults()
 void ScanCallbacks::onResult(const NimBLEAdvertisedDevice* advertisedDevice) {
@@ -24,7 +22,6 @@ void ScanCallbacks::onScanEnd(const NimBLEScanResults& results, int reason) {
 }
 
 
-// --- Scan Function ---
 void performBleScanAndReport() {
     Serial.println("Starting BLE scan for EasyTag devices...");
     publishStatus("scanning", ""); // Publish general scanning status
@@ -109,6 +106,3 @@ void performBleScanAndReport() {
 
     publishStatus("scan_complete", ""); // Publish scan completion status
 }
-
-// --- Old Scan Ended Callback (Removed) ---
-// void scanEndedCB(NimBLEScanResults results) { ... }

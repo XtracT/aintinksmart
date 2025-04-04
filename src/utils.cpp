@@ -5,7 +5,6 @@
 
 #include "utils.h"
 
-// --- Helper Functions ---
 std::vector<uint8_t> hexStringToBytes(const std::string& hex) {
     std::vector<uint8_t> bytes;
     if (hex.length() % 2 != 0) {

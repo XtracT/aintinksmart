@@ -3,7 +3,6 @@
 #include "config.h" // For WIFI_SSID, WIFI_PASSWORD
 #include "wifi_utils.h"
 
-// --- WiFi Connection ---
 void connectWiFi() {
     if(WiFi.isConnected()) return;
     Serial.print("Connecting to WiFi ");

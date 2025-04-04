@@ -5,9 +5,6 @@
 #include "mqtt_utils.h" // For publishStatus
 #include "ble_utils.h"
 
-// --- BLE Functions ---
-
-// Updated connectBLE to accept target MAC
 bool connectBLE(const std::string& targetMac) {
     if (bleConnected) return true;
 
@@ -23,8 +20,7 @@ bool connectBLE(const std::string& targetMac) {
             publishStatus("error_ble_client", targetMac); // Pass MAC to status
             return false;
         }
-        // Optional: Set connection parameters
-        // pClient->setConnectionParams(12,12,0,51);
+        // Optional: Set connection parameters like pClient->setConnectionParams(12,12,0,51);
     }
 
     // Check if already connected
@@ -40,7 +36,6 @@ bool connectBLE(const std::string& targetMac) {
     if (!pClient->connect(currentTargetAddress, false)) { // address, is_initiator (use default timeout)
         Serial.println("Connection failed");
         // Don't delete client here, allow retry in main loop
-        // publishStatus("error_ble_connect", targetMac); // Removed - Status handled by retry logic in main loop
         return false;
     }
     Serial.println("BLE Connected!");
@@ -93,16 +88,13 @@ bool writePacketToBLE(const std::vector<uint8_t>& packetData) {
 
     // Check if characteristic supports write without response
     bool needsResponse = !pRemoteCharacteristic->canWriteNoResponse();
-    // Serial.printf("Writing packet %d (%d bytes, Response:%s)... ", packetsWrittenCount + 1, packetData.size(), needsResponse ? "Yes" : "No");
 
     bool success = pRemoteCharacteristic->writeValue(packetData.data(), packetData.size(), needsResponse);
 
     if (success) {
-        // Serial.println("OK.");
         delay(20); // Crucial delay after successful write
         return true;
     } else {
-        // Serial.println("FAILED!");
         return false;
     }
 }
