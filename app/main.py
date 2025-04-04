@@ -130,7 +130,8 @@ async def attempt_mqtt_publish(client: aiomqtt.Client, mac_address: str, packets
 
         logger.info(f"MQTT command sequence published successfully for {mac_address}.")
         # Note: This only confirms publishing, not ESP32 execution.
-        return {"status": "success", "method": "mqtt", "message": "Command sequence published via MQTT."}
+        # Return an intermediate status indicating commands were sent, not final success
+        return {"status": "gateway_commands_sent", "method": "mqtt", "message": "Command sequence published via MQTT."}
 
     except aiomqtt.MqttError as e:
         logger.error(f"MQTT publishing error for {mac_address}: {e}")
@@ -314,6 +315,9 @@ async def process_scan_request(client: aiomqtt.Client, payload_str: str):
 
 
 
+# Define the gateway status wildcard topic pattern here for clarity
+GATEWAY_STATUS_WILDCARD = f"{MQTT_GATEWAY_BASE_TOPIC}/display/+/status"
+
 async def message_handler(client: aiomqtt.Client, stop_event: asyncio.Event):
     """Handles incoming MQTT messages and processes them."""
     logger.info("Message handler task started.")
@@ -336,11 +340,44 @@ async def message_handler(client: aiomqtt.Client, stop_event: asyncio.Event):
                 elif message.topic.matches(MQTT_SCAN_REQUEST_TOPIC):
                      # asyncio.create_task(process_scan_request(client, payload_str))
                      await process_scan_request(client, payload_str)
+                # --- Add Gateway Status Relay Logic ---
+                elif message.topic.matches(GATEWAY_STATUS_WILDCARD):
+                    logger.debug(f"Received gateway status on {message.topic}")
+                    try:
+                        # Extract MAC from topic: aintinksmart/gateway/display/AABBCCDDFF/status -> AABBCCDDFF
+                        topic_parts = message.topic.value.split('/')
+                        if len(topic_parts) == 5 and topic_parts[2] == 'display' and topic_parts[4] == 'status':
+                             mac_no_colons = topic_parts[3]
+                             # Reconstruct MAC with colons for consistency in payload
+                             mac_with_colons = ':'.join(mac_no_colons[i:i+2] for i in range(0, len(mac_no_colons), 2)).upper()
+
+                             # Construct the payload to be relayed
+                             relayed_payload = {
+                                 "mac_address": mac_with_colons,
+                                 "source": "gateway",
+                                 "gateway_status": payload_str # Keep the original gateway status string
+                             }
+                             # Add top-level 'status' for CLI interpretation
+                             if payload_str == "success":
+                                 relayed_payload["status"] = "success" # Final success
+                             elif payload_str.startswith("error_"):
+                                 relayed_payload["status"] = "error" # Final error
+                                 relayed_payload["message"] = f"Gateway error: {payload_str}" # Add specific error
+                             else:
+                                 # For intermediate statuses, prefix with 'gateway_'
+                                 relayed_payload["status"] = f"gateway_{payload_str}"
+                             logger.info(f"Relaying gateway status for {mac_with_colons}: {payload_str}")
+                             # Publish to the service's default status topic
+                             await client.publish(MQTT_DEFAULT_STATUS_TOPIC, payload=json.dumps(relayed_payload), qos=0)
+                        else:
+                             logger.warning(f"Could not parse MAC from gateway status topic: {message.topic}")
+                    except Exception as relay_error:
+                         logger.exception(f"Error relaying gateway status from topic {message.topic}: {relay_error}")
+                # --- End Gateway Status Relay Logic ---
                 else:
                      logger.warning(f"Received message on unexpected topic: {message.topic}")
             except Exception as e:
                  logger.exception(f"Error processing message from topic {message.topic}")
-
             # Check stop event again *after* processing message
             if stop_event.is_set():
                 logger.info("Stop event set after processing, stopping message handler.")
@@ -380,9 +417,14 @@ async def run_service():
                 password=MQTT_PASSWORD,
             ) as client:
                 logger.info("MQTT client connected.")
+                # Subscribe to service request topics
                 await client.subscribe(MQTT_REQUEST_TOPIC, qos=1)
                 await client.subscribe(MQTT_SCAN_REQUEST_TOPIC, qos=1)
-                logger.info(f"Subscribed to request topics.")
+                logger.info(f"Subscribed to service request topics.")
+                # Subscribe to gateway status wildcard topic if gateway mode is possible
+                if OPERATING_MODE == 'mqtt' or (OPERATING_MODE is None and USE_GATEWAY): # Subscribe even if initial mode detect fails but gateway is intended
+                     await client.subscribe(GATEWAY_STATUS_WILDCARD, qos=0) # QoS 0 for status
+                     logger.info(f"Subscribed to gateway status topic: {GATEWAY_STATUS_WILDCARD}")
 
                 # Start the message handler task
                 message_handler_task = asyncio.create_task(message_handler(client, stop_event))

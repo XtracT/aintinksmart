@@ -32,7 +32,7 @@ void setup() {
     Serial.print("MQTT Client ID: "); Serial.println(MQTT_CLIENT_ID);
     // Log base topics, specific topics are now dynamic or used internally
     // Log the defined topics
-    Serial.print("MQTT Gateway Base Topic: "); Serial.println(MQTT_GATEWAY_BASE_TOPIC);
+    // Base topic is implicitly shown in the topics below
     Serial.println("Subscribing to:");
     Serial.print(" - Start: "); Serial.println(MQTT_START_TOPIC);
     Serial.print(" - Packet: "); Serial.println(MQTT_PACKET_TOPIC);
@@ -118,7 +118,7 @@ void loop() {
                 if (packetQueue.empty() && endCommandReceived) {
                     transferInProgress = false; // Mark transfer complete
                     Serial.println("All queued packets sent after END command.");
-                    publishStatus("complete", currentTargetMac);
+                    publishStatus("success", currentTargetMac); // Change "complete" to "success"
                 } else {
                     publishStatus("writing", currentTargetMac);
                 }
