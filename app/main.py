@@ -153,10 +153,10 @@ async def attempt_mqtt_publish(client: aiomqtt.Client, mac_address: str, packets
                 await client.publish(packet_topic, payload=hex_packet_payload, qos=1)
                 await asyncio.sleep(delay_sec) # Wait between packets
 
-            # 4. Send End command
-            logger.debug(f"Publishing END to {end_topic}")
-            await client.publish(end_topic, payload="{}", qos=1)
-            await asyncio.sleep(0.1) # Small delay after end
+            # 4. END command is no longer sent. Gateway determines completion by packet count.
+            # logger.debug(f"Publishing END to {end_topic}")
+            # await client.publish(end_topic, payload="{}", qos=1)
+            # await asyncio.sleep(0.1) # Small delay after end
 
             logger.info(f"MQTT command sequence published successfully for {mac_address}.")
             # Return intermediate status - final status comes from relayed gateway message

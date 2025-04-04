@@ -24,5 +24,6 @@ extern const char* BLE_CHARACTERISTIC_UUID_STR;
 // Timing and Retries
 const int MAX_BLE_CONNECT_RETRIES = 4; // Max attempts to connect before failing transfer
 const int SCAN_DURATION_SECONDS = 15; // Increased duration for BLE scan
+const unsigned long PACKET_RECEIVE_TIMEOUT_MS = 15000; // Timeout for receiving next packet (15 seconds)
 
 #endif // CONFIG_H

@@ -24,7 +24,7 @@ String MQTT_CLIENT_ID = "esp32-eink-bridge-"; // Default prefix, will be appende
 // Subscription Topics (using wildcards where appropriate)
 String MQTT_START_TOPIC = MQTT_GATEWAY_BASE_TOPIC + "display/+/command/start";
 String MQTT_PACKET_TOPIC = MQTT_GATEWAY_BASE_TOPIC + "display/+/command/packet";
-String MQTT_END_TOPIC = MQTT_GATEWAY_BASE_TOPIC + "display/+/command/end";
+// String MQTT_END_TOPIC = MQTT_GATEWAY_BASE_TOPIC + "display/+/command/end"; // Removed
 String MQTT_SCAN_COMMAND_TOPIC = MQTT_GATEWAY_BASE_TOPIC + "bridge/command/scan";
 // Publish Topics (Base for dynamic construction or specific topics)
 String MQTT_DISPLAY_STATUS_TOPIC_BASE = MQTT_GATEWAY_BASE_TOPIC + "display/"; // Needs /{MAC}/status appended
@@ -45,7 +45,7 @@ NimBLERemoteCharacteristic* pRemoteCharacteristic = nullptr;
 bool bleConnected = false;
 bool transferInProgress = false;
 unsigned long lastActionTime = 0;
-bool endCommandReceived = false;
+// bool endCommandReceived = false; // Removed - completion based on packet count
 bool transferAborted = false;
 int bleConnectRetries = 0;
 bool writingStatusPublished = false; // Initialize flag
@@ -55,5 +55,6 @@ bool writingStatusPublished = false; // Initialize flag
 std::queue<std::vector<uint8_t>> packetQueue;
 int packetsReceivedCount = 0;
 int packetsWrittenCount = 0;
+uint16_t expectedPacketCount = 0; // Initialize expected count
 
 // Scan Callback Instance is defined in scan_utils.cpp

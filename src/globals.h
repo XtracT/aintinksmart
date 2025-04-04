@@ -44,7 +44,7 @@ extern NimBLERemoteCharacteristic* pRemoteCharacteristic;
 extern bool bleConnected;
 extern bool transferInProgress;
 extern unsigned long lastActionTime;
-extern bool endCommandReceived;
+// extern bool endCommandReceived; // Removed - completion based on packet count
 extern bool transferAborted;
 extern int bleConnectRetries;
 extern bool writingStatusPublished; // Flag to track if 'writing' status was sent
@@ -53,6 +53,7 @@ extern bool writingStatusPublished; // Flag to track if 'writing' status was sen
 extern std::queue<std::vector<uint8_t>> packetQueue;
 extern int packetsReceivedCount;
 extern int packetsWrittenCount;
+extern uint16_t expectedPacketCount; // Expected number of packets from START command
 
 // Scan State & Callback Instance
 // extern bool scanIsRunning; // No longer needed for blocking scan

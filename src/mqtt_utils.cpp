@@ -6,6 +6,7 @@
 #include <string>         // For std::string
 #include <algorithm>      // For std::transform
 #include <exception>      // For std::exception
+#include <ArduinoJson.h>  // For parsing START command payload
 
 #include "config.h"
 #include "globals.h"
@@ -31,13 +32,13 @@ void connectMQTT() {
         // Subscribe to command topics
         bool sub_start = mqttClient.subscribe(MQTT_START_TOPIC.c_str());
         bool sub_packet = mqttClient.subscribe(MQTT_PACKET_TOPIC.c_str());
-        bool sub_end = mqttClient.subscribe(MQTT_END_TOPIC.c_str());
+        // bool sub_end = mqttClient.subscribe(MQTT_END_TOPIC.c_str()); // Removed END topic
         bool sub_scan = mqttClient.subscribe(MQTT_SCAN_COMMAND_TOPIC.c_str()); // Subscribe to scan command
-        if (sub_start && sub_packet && sub_end && sub_scan) {
+        if (sub_start && sub_packet && sub_scan) { // Removed sub_end check
              Serial.println("Subscribed to wildcard command topics:");
              Serial.print(" - "); Serial.println(MQTT_START_TOPIC);
              Serial.print(" - "); Serial.println(MQTT_PACKET_TOPIC);
-             Serial.print(" - "); Serial.println(MQTT_END_TOPIC);
+             // Serial.print(" - "); Serial.println(MQTT_END_TOPIC); // Removed END topic log
              Serial.print(" - "); Serial.println(MQTT_SCAN_COMMAND_TOPIC);
         } else {
             Serial.println("Subscription failed!");
@@ -152,8 +153,29 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         }
 
         // --- Start new transfer ---
+        // Parse payload to get total_packets
+        ArduinoJson::JsonDocument doc; // Use recommended JsonDocument
+        ArduinoJson::DeserializationError error = ArduinoJson::deserializeJson(doc, payload, length);
+        if (error) {
+             Serial.print(" -> ERROR: Failed to parse START JSON: "); Serial.println(error.c_str());
+             publishStatus("error_start_format", formattedMac);
+             return;
+        }
+        // Use recommended check: doc["key"].is<T>()
+        if (!doc["total_packets"].is<unsigned int>()) {
+             Serial.println(" -> ERROR: START JSON missing or invalid 'total_packets'.");
+             publishStatus("error_start_format", formattedMac);
+             return;
+        }
+        expectedPacketCount = doc["total_packets"];
+        if (expectedPacketCount == 0) {
+             Serial.println(" -> ERROR: 'total_packets' cannot be zero.");
+             publishStatus("error_start_format", formattedMac);
+             return;
+        }
+
         currentTargetMac = formattedMac; // Store the target MAC for this transfer
-        Serial.printf(" -> Starting transfer for %s\n", currentTargetMac.c_str());
+        Serial.printf(" -> Starting transfer for %s (expecting %d packets)\n", currentTargetMac.c_str(), expectedPacketCount);
 
         // Attempt to create NimBLEAddress for validation
         try {
@@ -178,7 +200,6 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         std::queue<std::vector<uint8_t>> empty;
         std::swap(packetQueue, empty);
         packetsReceivedCount = 0;
-        endCommandReceived = false; // Reset flag on new transfer
         packetsWrittenCount = 0;
         transferAborted = false; // Reset abort flag for new transfer
         bleConnectRetries = 0; // Reset retry counter for new transfer
@@ -210,20 +231,18 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
              Serial.println(" -> Error converting hex packet data.");
              publishStatus("error_packet_format", currentTargetMac); // Use the currently active MAC
         }
-
-    // Check based on the new structure
-    } else if (topicStr.indexOf("/display/") != -1 && topicStr.endsWith("/command/end")) {
-        if (!transferInProgress || formattedMac != currentTargetMac) {
-            Serial.println(" -> Warning: Received 'end' for inactive/wrong transfer. Ignoring.");
-            return;
-        }
-        Serial.printf("Received END command after %d packets received.\n", packetsReceivedCount);
-        endCommandReceived = true; // Set flag
-        publishStatus("ending", currentTargetMac);
-        // If queue is already empty when END arrives, finish immediately
-        if (packetQueue.empty()) {
-            transferInProgress = false; // Loop will handle disconnect
-        }
+    // END command is no longer processed, completion based on packet count
+    // } else if (topicStr.indexOf("/display/") != -1 && topicStr.endsWith("/command/end")) {
+    //     if (!transferInProgress || formattedMac != currentTargetMac) {
+    //         Serial.println(" -> Warning: Received 'end' for inactive/wrong transfer. Ignoring.");
+    //         return;
+    //     }
+    //     Serial.printf("Received END command after %d packets received.\n", packetsReceivedCount);
+        // publishStatus("ending", currentTargetMac); // Removed - No longer relevant
+    //     // If queue is already empty when END arrives, finish immediately
+    //     if (packetQueue.empty()) {
+    //         transferInProgress = false; // Loop will handle disconnect
+    //     }
     // Scan command handled above
     } else {
          Serial.println(" -> Ignoring message on unknown command topic suffix.");

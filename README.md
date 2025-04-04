@@ -9,6 +9,8 @@ It operates in one of two modes, determined at startup by environment variables:
 
 The service listens for image sending and scan requests on configured MQTT topics and publishes intermediate status updates to a default topic.
 
+For a detailed overview of the system components and their interactions, please refer to the [System Architecture document](ARCHITECTURE.md).
+
 ## Description
 
 The service implements a communication protocol based on reverse engineering. It listens for requests on MQTT topics.
@@ -46,7 +48,7 @@ The service is configured using environment variables when running the Docker co
 *   `MQTT_REQUEST_TOPIC` (Optional): Topic for image send requests (default: `aintinksmart/service/request/send_image`).
 *   `MQTT_SCAN_REQUEST_TOPIC` (Optional): Topic for scan requests (default: `aintinksmart/service/request/scan`).
 *   `MQTT_DEFAULT_STATUS_TOPIC` (Optional): Topic for service status updates and direct BLE scan results (default: `aintinksmart/service/status/default`).
-*   `MQTT_GATEWAY_BASE_TOPIC` (Optional, for MQTT Gateway Mode): Base topic for communicating with the ESP32 gateway (default: `aintinksmart/gateway`). Commands are sent to `{MQTT_GATEWAY_BASE_TOPIC}/display/{MAC_NO_COLONS}/command/...` and scan commands to `{MQTT_GATEWAY_BASE_TOPIC}/bridge/command/scan`. Gateway status/results are published under this base (see `mqtt_topics.md`).
+*   `MQTT_GATEWAY_BASE_TOPIC` (Optional, for MQTT Gateway Mode): Base topic for communicating with the ESP32 gateway (default: `aintinksmart/gateway`). Commands are sent to specific sub-topics under this base. Gateway status and results are also published under this base. For a complete list and description of all MQTT topics, see [mqtt_topics.md](mqtt_topics.md).
 *   `EINK_PACKET_DELAY_MS` (Optional, for MQTT Gateway Mode): Delay in milliseconds between sending individual packet messages via MQTT to the custom firmware. Defaults to `20`.
 
 **Note:** The service will exit on startup if a valid operating mode cannot be determined (e.g., `USE_GATEWAY=true` but `MQTT_BROKER` is not set, or `USE_GATEWAY=false` and `BLE_ENABLED=false`).
@@ -91,6 +93,8 @@ The service is configured using environment variables when running the Docker co
         ```
 
 ## Usage (via MQTT or CLI Scripts)
+
+Communication primarily happens via MQTT messages. See [mqtt_topics.md](mqtt_topics.md) for details on the specific topics used for requests and status updates.
 
 ### 1. Sending an Image
 
@@ -152,13 +156,13 @@ The service is configured using environment variables when running the Docker co
 
 (This section remains largely the same)
 
-The MQTT functionality relies on the custom ESP32 firmware located in the `src/` directory.
+The MQTT functionality relies on the custom ESP32 firmware located in the `src/` directory. See [ARCHITECTURE.md](ARCHITECTURE.md) for more details on the gateway's role and interaction with the service.
 
 **Functionality:**
 *   Connects to WiFi and MQTT broker.
-*   Subscribes to display command topics: `{base}/display/+/command/start`, `.../packet`, `.../end`.
+*   Subscribes to display command topics: `{base}/display/+/command/start`, `{base}/display/+/command/packet`. (The `.../end` topic is no longer used).
 *   Subscribes to bridge scan command topic: `{base}/bridge/command/scan`.
-*   Handles image transfer commands.
+*   Handles image transfer commands: Receives the expected packet count in the `start` payload. Waits for the BLE connection to the display to be established (publishing `connected_ble` status) before processing packets. Receives packets sequentially on the `packet` topic (MQTT QoS 1 ensures order). Determines completion based on receiving the expected number of packets or a packet receive timeout (to handle potential packet loss).
 *   Publishes display status updates to `{base}/display/{MAC_NO_COLONS}/status`.
 *   Publishes bridge status updates to `{base}/bridge/status`.
 *   On receiving message on `{base}/bridge/command/scan`, performs BLE scan and publishes results to `{base}/bridge/scan_result`.

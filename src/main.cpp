@@ -36,7 +36,7 @@ void setup() {
     Serial.println("Subscribing to:");
     Serial.print(" - Start: "); Serial.println(MQTT_START_TOPIC);
     Serial.print(" - Packet: "); Serial.println(MQTT_PACKET_TOPIC);
-    Serial.print(" - End: "); Serial.println(MQTT_END_TOPIC);
+    // Serial.print(" - End: "); Serial.println(MQTT_END_TOPIC); // Removed
     Serial.print(" - Scan Cmd: "); Serial.println(MQTT_SCAN_COMMAND_TOPIC);
     Serial.println("Publishing to:");
     Serial.print(" - Display Status Base: "); Serial.println(MQTT_DISPLAY_STATUS_TOPIC_BASE);
@@ -106,7 +106,21 @@ void loop() {
              bleConnectRetries = 0; // Reset if already connected
         }
 
-        // 2. Process Packet Queue if Connected
+        // 2. Check for Packet Receive Timeout
+        // Only check if we have received at least one packet and haven't received the expected count yet
+        if (packetsReceivedCount > 0 && packetsReceivedCount < expectedPacketCount) {
+             if (millis() - lastActionTime > PACKET_RECEIVE_TIMEOUT_MS) {
+                  Serial.printf("Packet receive timeout! Expected %d, got %d. Last packet received > %lums ago.\n",
+                                expectedPacketCount, packetsReceivedCount, PACKET_RECEIVE_TIMEOUT_MS);
+                  publishStatus("error_packet_timeout", currentTargetMac);
+                  transferAborted = true;
+                  transferInProgress = false; // Signal loop to clean up
+                  disconnectBLE(true); // Force disconnect state cleanup
+                  return; // Exit transfer processing
+             }
+        }
+
+        // 3. Process Packet Queue if Connected
         if (transferAborted) return; // Check again after potential connection attempt
         if (bleConnected && !packetQueue.empty()) {
             std::vector<uint8_t> packet = packetQueue.front();
@@ -115,9 +129,10 @@ void loop() {
                 packetQueue.pop();
                 packetsWrittenCount++;
                 lastActionTime = millis(); // Reset timer on successful write
-                if (packetQueue.empty() && endCommandReceived) {
+                // Check if this was the last expected packet based on count
+                if (packetsReceivedCount == expectedPacketCount && packetsWrittenCount == expectedPacketCount) {
                     transferInProgress = false; // Mark transfer complete
-                    Serial.println("All queued packets sent after END command.");
+                    Serial.printf("%d/%d packets received and written.\n", packetsWrittenCount, expectedPacketCount);
                     // Add debug log before publishing final status
                     Serial.printf("DEBUG: Publishing final success. MQTT State: %d\n", mqttClient.state());
                     publishStatus("success", currentTargetMac);
@@ -153,9 +168,10 @@ void loop() {
         }
 
         // Perform final state cleanup only if a target was active
+        // Perform final state cleanup only if a target was active
         if (!currentTargetMac.empty()) {
+             expectedPacketCount = 0; // Reset expected count
              Serial.printf(" -> Cleaning up state for completed/aborted transfer: %s\n", currentTargetMac.c_str());
-             endCommandReceived = false;
              lastActionTime = 0;
              bleConnectRetries = 0;
              transferAborted = false; // Reset abort flag for next transfer
