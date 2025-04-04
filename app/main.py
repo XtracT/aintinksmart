@@ -21,6 +21,12 @@ from .packet_builder import PacketBuilder, PacketBuilderError
 from .ble_communicator import BleCommunicator, BleCommunicationError
 from .models import SendImageBaseRequest # Keep for validation if needed for MQTT payload
 
+# --- Global State for Gateway Flow Control ---
+# Stores asyncio.Event objects keyed by MAC address, signaling gateway readiness
+gateway_ready_events: Dict[str, asyncio.Event] = {}
+gateway_ready_lock = asyncio.Lock() # To protect access to the dict
+GATEWAY_CONNECT_TIMEOUT = 60.0 # Seconds to wait for gateway 'connected_ble' status
+
 # --- Logging Setup ---
 logging.basicConfig(
     level=logging.INFO,
@@ -99,7 +105,10 @@ async def attempt_direct_ble(client: aiomqtt.Client, mac_address: str, packets_b
 
 # base_topic is now MQTT_GATEWAY_BASE_TOPIC
 async def attempt_mqtt_publish(client: aiomqtt.Client, mac_address: str, packets_bytes_list: List[bytes], gateway_base_topic: str, delay_ms: int) -> Dict[str, Any]:
-    """Publishes the command sequence via MQTT."""
+    """
+    Sends START command, waits for gateway 'connected_ble' status,
+    then publishes PACKET and END commands via MQTT.
+    """
     logger.info(f"Attempting MQTT publish to gateway for {mac_address}...")
     mac_topic_part = mac_address.replace(":", "")
     # Construct topics using the new structure: aintinksmart/gateway/display/{MAC}/command/...
@@ -115,23 +124,51 @@ async def attempt_mqtt_publish(client: aiomqtt.Client, mac_address: str, packets
         await client.publish(start_topic, payload=start_payload, qos=1)
         await asyncio.sleep(0.1) # Small delay after start
 
-        # 2. Send Packet commands
-        logger.info(f"Publishing {len(packets_bytes_list)} packets via MQTT...")
-        for i, packet_bytes in enumerate(packets_bytes_list):
-            hex_packet_payload = binascii.hexlify(packet_bytes).upper().decode()
-            logger.debug(f"Publishing PACKET {i+1}/{len(packets_bytes_list)}")
-            await client.publish(packet_topic, payload=hex_packet_payload, qos=1)
-            await asyncio.sleep(delay_sec) # Wait between packets
+        # 2. Wait for Gateway to signal readiness (connected_ble status)
+        ready_event = asyncio.Event()
+        async with gateway_ready_lock:
+            # Check if another request for the same MAC is already waiting
+            if mac_address in gateway_ready_events:
+                 logger.warning(f"Gateway request already pending for {mac_address}. Aborting new request.")
+                 # TODO: Should we cancel the previous one? For now, just fail the new one.
+                 return {"status": "error", "method": "mqtt", "message": f"Gateway busy with previous request for {mac_address}."}
+            gateway_ready_events[mac_address] = ready_event
 
-        # 3. Send End command
-        logger.debug(f"Publishing END to {end_topic}")
-        await client.publish(end_topic, payload="{}", qos=1)
-        await asyncio.sleep(0.1) # Small delay after end
+        # Log the event ID we are about to wait on
+        logger.info(f"Waiting up to {GATEWAY_CONNECT_TIMEOUT}s for gateway {mac_address} (Event ID: {id(ready_event)}) to connect to BLE...")
+        await publish_status(client, mac_address, "gateway_waiting_connect") # Inform client we are waiting
 
-        logger.info(f"MQTT command sequence published successfully for {mac_address}.")
-        # Note: This only confirms publishing, not ESP32 execution.
-        # Return an intermediate status indicating commands were sent, not final success
-        return {"status": "gateway_commands_sent", "method": "mqtt", "message": "Command sequence published via MQTT."}
+        try:
+            async with asyncio.timeout(GATEWAY_CONNECT_TIMEOUT):
+                await ready_event.wait()
+            logger.info(f"Gateway {mac_address} signaled ready (connected_ble received).")
+            # Gateway is ready, proceed to send packets
+
+            # 3. Send Packet commands
+            logger.info(f"Publishing {len(packets_bytes_list)} packets via MQTT for {mac_address}...")
+            await publish_status(client, mac_address, "gateway_sending_packets")
+            for i, packet_bytes in enumerate(packets_bytes_list):
+                hex_packet_payload = binascii.hexlify(packet_bytes).upper().decode()
+                # logger.debug(f"Publishing PACKET {i+1}/{len(packets_bytes_list)}") # Reduce log spam
+                await client.publish(packet_topic, payload=hex_packet_payload, qos=1)
+                await asyncio.sleep(delay_sec) # Wait between packets
+
+            # 4. Send End command
+            logger.debug(f"Publishing END to {end_topic}")
+            await client.publish(end_topic, payload="{}", qos=1)
+            await asyncio.sleep(0.1) # Small delay after end
+
+            logger.info(f"MQTT command sequence published successfully for {mac_address}.")
+            # Return intermediate status - final status comes from relayed gateway message
+            return {"status": "gateway_commands_sent", "method": "mqtt", "message": "Command sequence published via MQTT."}
+
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout waiting for gateway {mac_address} to connect to BLE.")
+            return {"status": "error", "method": "mqtt", "message": f"Gateway connect timeout for {mac_address}."}
+        finally:
+            # Clean up the event regardless of outcome
+            async with gateway_ready_lock:
+                gateway_ready_events.pop(mac_address, None)
 
     except aiomqtt.MqttError as e:
         logger.error(f"MQTT publishing error for {mac_address}: {e}")
@@ -331,15 +368,16 @@ async def message_handler(client: aiomqtt.Client, stop_event: asyncio.Event):
             logger.info(f"Received message on topic: {message.topic}")
             try:
                 payload_str = message.payload.decode()
-                # Schedule processing as a separate task to avoid blocking message iteration?
-                # Might be overkill if processing is fast, but safer.
-                # For now, process directly but be aware this could block receiving new messages.
+                # Schedule processing as a separate task to avoid blocking the message handler loop,
+                # especially important now that process_request might wait for gateway readiness.
                 if message.topic.matches(MQTT_REQUEST_TOPIC):
-                     # asyncio.create_task(process_request(client, payload_str))
-                     await process_request(client, payload_str)
+                     logger.debug("Creating background task for process_request")
+                     asyncio.create_task(process_request(client, payload_str))
+                     # Don't await here - let it run in the background
                 elif message.topic.matches(MQTT_SCAN_REQUEST_TOPIC):
-                     # asyncio.create_task(process_scan_request(client, payload_str))
-                     await process_scan_request(client, payload_str)
+                     logger.debug("Creating background task for process_scan_request")
+                     asyncio.create_task(process_scan_request(client, payload_str))
+                     # Don't await here
                 # --- Add Gateway Status Relay Logic ---
                 elif message.topic.matches(GATEWAY_STATUS_WILDCARD):
                     logger.debug(f"Received gateway status on {message.topic}")
@@ -347,32 +385,50 @@ async def message_handler(client: aiomqtt.Client, stop_event: asyncio.Event):
                         # Extract MAC from topic: aintinksmart/gateway/display/AABBCCDDFF/status -> AABBCCDDFF
                         topic_parts = message.topic.value.split('/')
                         if len(topic_parts) == 5 and topic_parts[2] == 'display' and topic_parts[4] == 'status':
-                             mac_no_colons = topic_parts[3]
-                             # Reconstruct MAC with colons for consistency in payload
-                             mac_with_colons = ':'.join(mac_no_colons[i:i+2] for i in range(0, len(mac_no_colons), 2)).upper()
+                            mac_no_colons = topic_parts[3]
+                            # Reconstruct MAC with colons for consistency
+                            mac_with_colons = ':'.join(mac_no_colons[i:i+2] for i in range(0, len(mac_no_colons), 2)).upper()
 
-                             # Construct the payload to be relayed
-                             relayed_payload = {
-                                 "mac_address": mac_with_colons,
-                                 "source": "gateway",
-                                 "gateway_status": payload_str # Keep the original gateway status string
-                             }
-                             # Add top-level 'status' for CLI interpretation
-                             if payload_str == "success":
-                                 relayed_payload["status"] = "success" # Final success
-                             elif payload_str.startswith("error_"):
-                                 relayed_payload["status"] = "error" # Final error
-                                 relayed_payload["message"] = f"Gateway error: {payload_str}" # Add specific error
-                             else:
-                                 # For intermediate statuses, prefix with 'gateway_'
-                                 relayed_payload["status"] = f"gateway_{payload_str}"
-                             logger.info(f"Relaying gateway status for {mac_with_colons}: {payload_str}")
-                             # Publish to the service's default status topic
-                             await client.publish(MQTT_DEFAULT_STATUS_TOPIC, payload=json.dumps(relayed_payload), qos=0)
+                            # --- Flow Control: Signal if gateway is connected ---
+                            # Check the *content* of the message (payload_str)
+                            # Log the received payload string for debugging
+                            logger.debug(f"Gateway status payload for {mac_with_colons}: '{payload_str}'")
+                            if payload_str == "connected_ble":
+                                async with gateway_ready_lock:
+                                    if mac_with_colons in gateway_ready_events:
+                                        event_to_set = gateway_ready_events[mac_with_colons]
+                                        # Log the event ID we are about to set
+                                        logger.info(f"Gateway {mac_with_colons} reported connected_ble. Signaling Event ID: {id(event_to_set)}.")
+                                        event_to_set.set()
+                                    else:
+                                        logger.warning(f"Received connected_ble for {mac_with_colons}, but no task was waiting in gateway_ready_events.")
+                            # --- End Flow Control ---
+
+                            # --- Relay Logic ---
+                            # Construct the payload to be relayed
+                            relayed_payload = {
+                                "mac_address": mac_with_colons,
+                                "source": "gateway",
+                                "gateway_status": payload_str # Keep the original gateway status string
+                            }
+                            # Add top-level 'status' for CLI interpretation
+                            if payload_str == "success":
+                                relayed_payload["status"] = "success" # Final success
+                            elif payload_str.startswith("error_"):
+                                relayed_payload["status"] = "error" # Final error
+                                relayed_payload["message"] = f"Gateway error: {payload_str}" # Add specific error
+                            else:
+                                # For intermediate statuses, prefix with 'gateway_'
+                                relayed_payload["status"] = f"gateway_{payload_str}"
+
+                            logger.info(f"Relaying gateway status for {mac_with_colons}: {payload_str}")
+                            # Publish the constructed payload to the service's default status topic
+                            await client.publish(MQTT_DEFAULT_STATUS_TOPIC, payload=json.dumps(relayed_payload), qos=0)
+                            # --- End Relay Logic ---
                         else:
-                             logger.warning(f"Could not parse MAC from gateway status topic: {message.topic}")
+                            logger.warning(f"Could not parse MAC from gateway status topic: {message.topic}")
                     except Exception as relay_error:
-                         logger.exception(f"Error relaying gateway status from topic {message.topic}: {relay_error}")
+                        logger.exception(f"Error relaying gateway status from topic {message.topic}: {relay_error}")
                 # --- End Gateway Status Relay Logic ---
                 else:
                      logger.warning(f"Received message on unexpected topic: {message.topic}")
