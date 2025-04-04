@@ -76,8 +76,9 @@ The service is configured using environment variables when running the Docker co
 
     *   **Example: Direct BLE Mode:** (Requires host BLE access)
         ```bash
-        # Ensure container has BLE access (--net=host or other method)
-        docker run --rm -it --net=host \
+        # Ensure container has BLE access by mounting the host's D-Bus socket.
+        # This is often more reliable than --net=host for BLE access via D-Bus.
+        docker run --rm -it -v /var/run/dbus:/var/run/dbus \
           -e MQTT_BROKER=<your_broker_ip> \
           -e MQTT_USERNAME=<your_mqtt_user> \
           -e MQTT_PASSWORD=<your_mqtt_pass> \
