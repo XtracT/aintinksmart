@@ -1,0 +1,6 @@
+# Removed FastAPI, Uvicorn, Jinja2, python-multipart, paho-mqtt
+bleak>=0.20.0 # Still needed for direct BLE
+Pillow>=9.0.0
+aiomqtt>=1.0.0 # Added for async MQTT
+pydantic>=1.9.0 # Re-added for request model validation
+paho-mqtt>=1.6.0 # Added back for CLI scripts
