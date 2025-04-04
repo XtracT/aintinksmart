@@ -124,7 +124,6 @@ class PacketBuilder:
 
         packets: List[bytes] = []
 
-        # --- Header Chunk ---
         header_chunk = bytearray(config.HEADER_LENGTH)
         header_chunk[0:2] = config.HEADER_PACKET_TYPE # FF FC
         header_chunk[2:9] = config.HEADER_TAG # "easyTag"
@@ -149,7 +148,6 @@ class PacketBuilder:
         final_header = self._apply_xor(header_chunk, mac_xor_key, secret_char_key, is_header=True)
         packets.append(final_header)
 
-        # --- Data Chunks ---
         for chunk_index in range(num_data_chunks):
             data_chunk = bytearray(config.DATA_CHUNK_TOTAL_LENGTH)
 

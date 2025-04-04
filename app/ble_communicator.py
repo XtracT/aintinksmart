@@ -12,11 +12,9 @@ from bleak.exc import BleakError
 from . import config
 
 # Constants
-# Small delay between packets can improve reliability on some devices
 PACKET_SEND_DELAY = 0.02 # seconds
-# Time to wait after sending all packets for device processing/notifications
+# Delay after sending all packets for device processing/notifications
 POST_SEND_WAIT_DELAY = 5.0 # seconds
-# Connection timeout
 CONNECTION_TIMEOUT = 30.0 # seconds
 
 
@@ -55,12 +53,11 @@ class BleCommunicator:
             await self.client.connect()
             if self.client.is_connected:
                 logging.info(f"Connected successfully to {self.address}.")
-                # Ensure services are discovered (good practice after connect)
-                # Access services property to ensure discovery (replaces deprecated get_services())
+                # Access services property to ensure discovery
                 _ = self.client.services
                 logging.debug("Services discovered (implicitly or explicitly).")
             else:
-                 # Safety check in case connect() doesn't raise but fails
+                 # Safety check
                  raise BleCommunicationError("Connection attempt finished but client is not connected.")
 
         except BleakError as e:
@@ -78,13 +75,12 @@ class BleCommunicator:
 
         logging.info(f"Disconnecting from {self.address}...")
         try:
-            # Only attempt to stop notify if still connected
             if self.client.is_connected:
                 try:
                     await self.client.stop_notify(config.NOTIFY_CHAR_UUID)
                     logging.debug("Stopped notifications.")
                 except BleakError as e:
-                    # Log non-critical failure (e.g., if notifications weren't started or already disconnected)
+                    # Log non-critical failure
                     logging.warning(f"Could not stop notifications during disconnect: {e}")
                 except Exception as e:
                      logging.warning(f"Unexpected error stopping notifications: {e}")
@@ -153,7 +149,7 @@ class BleCommunicator:
             await asyncio.sleep(POST_SEND_WAIT_DELAY)
         logging.info("Image sending process complete.")
 
-    # Context manager support for automatic connect/disconnect
+    # Context manager support
     async def __aenter__(self):
         await self.connect()
         return self

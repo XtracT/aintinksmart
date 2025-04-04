@@ -5,7 +5,7 @@ import logging
 import io
 from typing import List, Dict, Any
 from PIL import Image
-from . import config # Use relative import within the app package
+from . import config
 
 class ImageProcessingError(Exception):
     """Custom exception for image processing failures."""
@@ -20,9 +20,7 @@ class ImageProcessor:
         if multiple == 0:
             return n
         return ((n + multiple - 1) // multiple) * multiple
-        # Original bitwise version: return ((n + multiple - 1) & (~(multiple - 1)))
-        # Using //* is arguably more readable for non-power-of-2 multiples,
-        # though PAD_MULTIPLE is 8 here.
+        # Note: Original bitwise version was ((n + multiple - 1) & (~(multiple - 1)))
 
     def process_image(self, image_bytes: bytes, mode: str = config.DEFAULT_COLOR_MODE) -> Dict[str, Any]:
         """
@@ -44,7 +42,6 @@ class ImageProcessor:
         """
         logging.info(f"Processing image with mode: {mode}")
         try:
-            # Open image from bytes
             img_file = io.BytesIO(image_bytes)
             im = Image.open(img_file).convert("RGB")
         except Exception as e:
@@ -64,46 +61,43 @@ class ImageProcessor:
 
         threshold = config.IMAGE_PROCESSING_THRESHOLD
 
-        # Process pixels into an intermediate 2D map based on color/luminance
-        # Using a flat list might be slightly more efficient, but 2D is easier to visualize
-        # Initialize pixel_map with padding assumption (default white = 1)
+        # Process pixels into an intermediate 2D map (easier to visualize padding)
+        # Default to white (1) for padded areas
         pixel_map = [[1 for _ in range(padded_height)] for _ in range(padded_width)] # Default to white (1)
 
         for y in range(height):
             for x in range(width):
                 try:
                     r, g, b = im.getpixel((x, y))
-                    # Simple luminance calculation
                     lum = (r + g + b) // 3
 
                     if mode == "bw":
-                        pixel_map[x][y] = 0 if lum < threshold else 1 # 0: Black, 1: White
-                    else:  # bwr mode (default)
-                        # Prioritize red detection (simple heuristic)
+                        pixel_map[x][y] = 0 if lum < threshold else 1
+                    else:  # bwr mode
+                        # Simple red detection heuristic
                         is_red = (r > 2 * g) and (r > 2 * b) and r > threshold
                         is_dark = lum < threshold
 
                         if is_red:
-                            pixel_map[x][y] = 2  # Red
+                            pixel_map[x][y] = 2
                         elif is_dark:
-                            pixel_map[x][y] = 0  # Black
+                            pixel_map[x][y] = 0
                         else:
-                            pixel_map[x][y] = 1  # White
+                            pixel_map[x][y] = 1
                 except IndexError:
-                    # Should not happen with Pillow's getpixel and correct loops
+                    # Should not happen with Pillow's getpixel
                     logging.warning(f"Pixel index out of bounds at ({x},{y}) - check logic.")
                     continue
 
-        # Transform the 2D pixel map into linear black and red bitplanes
-        # Iterate through the padded dimensions
+        # Transform the 2D pixel map into linear bitplanes (handling padding)
         for y_pad in range(padded_height):
             for x_pad in range(padded_width):
                 idx = (y_pad * padded_width) + x_pad
-                if idx >= padded_size: # Safety check, should not be needed with correct loops
+                if idx >= padded_size: # Safety check
                     logging.warning(f"Calculated index {idx} exceeds padded size {padded_size}")
                     continue
 
-                # Get value from pixel_map (defaults to 1=white if outside original bounds)
+                # Get value from pixel_map (handles padding implicitly via initialization)
                 pixel_value = pixel_map[x_pad][y_pad]
 
                 if pixel_value == 0:  # Black
@@ -115,7 +109,7 @@ class ImageProcessor:
                 elif pixel_value == 2:  # Red
                     black_bits[idx] = 0
                     red_bits[idx] = 1
-                # else: pixel_value remains 1 (White), bits already initialized to 0
+                # else: pixel_value is 1 (White), bits already 0
 
         logging.info(f"Image processing complete. Bitplane size: {len(black_bits)}")
         return {
