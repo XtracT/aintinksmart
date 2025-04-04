@@ -40,5 +40,5 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/xtract/mealiemate:latest
-            ghcr.io/xtract/mealiemate:${{ github.ref_name }}
+            ghcr.io/xtract/aintinksmart:latest
+            ghcr.io/xtract/aintinksmart:${{ github.ref_name }}
