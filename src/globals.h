@@ -47,6 +47,7 @@ extern unsigned long lastActionTime;
 extern bool endCommandReceived;
 extern bool transferAborted;
 extern int bleConnectRetries;
+extern bool writingStatusPublished; // Flag to track if 'writing' status was sent
 
 // Packet Queue
 extern std::queue<std::vector<uint8_t>> packetQueue;

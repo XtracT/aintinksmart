@@ -118,9 +118,20 @@ void loop() {
                 if (packetQueue.empty() && endCommandReceived) {
                     transferInProgress = false; // Mark transfer complete
                     Serial.println("All queued packets sent after END command.");
-                    publishStatus("success", currentTargetMac); // Change "complete" to "success"
+                    // Add debug log before publishing final status
+                    Serial.printf("DEBUG: Publishing final success. MQTT State: %d\n", mqttClient.state());
+                    publishStatus("success", currentTargetMac);
                 } else {
-                    publishStatus("writing", currentTargetMac);
+                    // Publish "writing" status only once at the start of writing
+                    if (!writingStatusPublished) {
+                        publishStatus("writing", currentTargetMac);
+                        writingStatusPublished = true;
+                    }
+                    // Optional: Add a less frequent serial log for progress if desired
+                    // e.g., log every 10 packets written
+                    if (packetsWrittenCount % 10 == 0) {
+                         Serial.printf(" -> Wrote packet %d\n", packetsWrittenCount);
+                    }
                 }
             } else {
                 Serial.println("Packet write failed.");
@@ -148,6 +159,7 @@ void loop() {
              lastActionTime = 0;
              bleConnectRetries = 0;
              transferAborted = false; // Reset abort flag for next transfer
+             writingStatusPublished = false; // Reset writing status flag
              // Clear queue
              std::queue<std::vector<uint8_t>> empty;
              std::swap(packetQueue, empty);

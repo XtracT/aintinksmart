@@ -96,6 +96,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     // Only print the full arrival message for non-packet commands to avoid serial clutter/corruption
     if (!isPacket) {
         Serial.print("Message arrived ["); Serial.print(topic); Serial.print("] ");
+        // Move Target MAC print here, only for non-packet messages
     }
 
     // First, check for the specific scan command topic which doesn't have a MAC
@@ -120,13 +121,15 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         Serial.println(" -> Ignoring message on invalid topic format (or not scan command).");
         return;
     }
-    Serial.print(" -> Target MAC: "); Serial.print(formattedMac.c_str());
+    if (!isPacket) { // Print Target MAC only for non-packet messages
+         Serial.print(" -> Target MAC: "); Serial.print(formattedMac.c_str());
+    }
 
     // Reset inactivity timer only if message is for the active transfer or a new start command
     bool isStartCommand = topicStr.endsWith("/command/start");
     if (isStartCommand || (transferInProgress && formattedMac == currentTargetMac)) {
          lastActionTime = millis();
-         Serial.print(" (Timer Reset)");
+         // Serial.print(" (Timer Reset)"); // Removed for cleaner logs
     }
      // End initial log line only if it was started (and wasn't scan command)
      if (!isPacket) {
@@ -179,6 +182,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         packetsWrittenCount = 0;
         transferAborted = false; // Reset abort flag for new transfer
         bleConnectRetries = 0; // Reset retry counter for new transfer
+        writingStatusPublished = false; // Reset writing status flag
 
         transferInProgress = true; // Set flag AFTER validation and state reset
         publishStatus("starting", currentTargetMac);

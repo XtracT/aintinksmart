@@ -48,6 +48,7 @@ unsigned long lastActionTime = 0;
 bool endCommandReceived = false;
 bool transferAborted = false;
 int bleConnectRetries = 0;
+bool writingStatusPublished = false; // Initialize flag
 // bool scanIsRunning = false; // No longer needed for blocking scan
 
 // Packet Queue
