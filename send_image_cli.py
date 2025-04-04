@@ -57,7 +57,7 @@ def on_connect(client, userdata, flags, rc):
 
 def on_message(client, userdata, msg):
     global response_received
-    print(f"CLI: Received message on {msg.topic}")
+    # Removed verbose "Received message" log
     try:
         payload_data = json.loads(msg.payload.decode())
         target_mac = userdata['target_mac'] # Get target MAC for filtering default status
@@ -66,24 +66,26 @@ def on_message(client, userdata, msg):
 
         # Handle specific response
         if response_topic and msg.topic == response_topic:
-            print(f"CLI: Received final response: {json.dumps(payload_data, indent=2)}")
+            # Process final response/status
+            status = payload_data.get('status', '')
+            print(f"Status ({target_mac}): {status} (Final Response)") # Indicate it's the final response
             with response_lock:
                 response_received = payload_data
-            stop_event.set() # Stop on final response
+            # Stop if the status indicates completion
+            if status == 'success' or status.startswith('error'):
+                stop_event.set()
         # Handle default status updates
         elif msg.topic == default_status_topic:
             # Check if the status update is for our target MAC
             if payload_data.get("mac_address") == target_mac:
-                 print(f"CLI: Status update for {target_mac}: {payload_data.get('status', 'N/A')}")
-                 # Check if this status is final (optional, could rely on response_topic)
-                 status = payload_data.get('status', '')
+                 status = payload_data.get('status', 'N/A')
+                 print(f"Status ({target_mac}): {status}")
+                 # Check if this status is final and store/stop if needed
                  if status == 'success' or status.startswith('error'):
-                      # If no specific response topic was set, treat this as final
-                      if not response_topic:
-                           print("CLI: Received final status on default topic.")
-                           with response_lock:
-                                response_received = payload_data # Store it anyway
-                           stop_event.set()
+                      print(f"Status ({target_mac}): Final status received on default topic.")
+                      with response_lock:
+                           response_received = payload_data # Store it
+                      stop_event.set() # Stop on final status
             # else: # Ignore status updates for other MACs (can be verbose)
                  # logger.debug(f"Ignoring status for other MAC: {payload_data.get('mac_address')}")
         else:
@@ -146,7 +148,8 @@ if __name__ == "__main__":
         'payload': payload_json
     }
 
-    client = mqtt.Client(userdata=userdata)
+    # Use latest Callback API version to avoid DeprecationWarning
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, userdata=userdata)
     client.on_connect = on_connect
     client.on_message = on_message
     client.on_disconnect = on_disconnect
@@ -171,20 +174,21 @@ if __name__ == "__main__":
     client.disconnect()
 
     print("\n--- Result ---")
-    # Check if a specific response was received (only if response_topic was set)
-    if args.response_topic:
-        with response_lock:
-            if response_received:
-                print("Final Response:")
-                print(json.dumps(response_received, indent=2))
+    # Check if a final response/status was received
+    with response_lock:
+        if response_received:
+            # Print a simpler final message instead of the full JSON
+            final_status = response_received.get("status", "unknown")
+            final_message = response_received.get("message", "")
+            print(f"Final Result: {final_status.upper()}")
+            if final_message:
+                print(f"Message: {final_message}")
+            # Optionally exit with success/error code based on status
+            if response_received.get("status") == "success":
+                 sys.exit(0) # Success exit code
             else:
-                print("No final response received on specified topic within timeout.")
-    else:
-         # If no response topic, check if we stored the last status from default topic
-         with response_lock:
-              if response_received: # This might have been set by a final status on default topic
-                   print("Final Status Received on Default Topic:")
-                   print(json.dumps(response_received, indent=2))
-              else:
-                   print("No final status/response received within timeout.")
+                 sys.exit(1) # Error exit code
+        else:
+            print("No final status/response received within timeout.")
+            sys.exit(1) # Error exit code on timeout
     print("--------------")

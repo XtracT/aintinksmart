@@ -57,17 +57,30 @@ else:
     exit(1)
 
 # --- Helper Functions ---
-async def attempt_direct_ble(mac_address: str, packets_bytes_list: List[bytes]) -> Dict[str, Any]:
-    """Attempts to send packets directly via BLE with timeout."""
+async def attempt_direct_ble(client: aiomqtt.Client, mac_address: str, packets_bytes_list: List[bytes]) -> Dict[str, Any]:
+    """
+    Attempts to send packets directly via BLE with timeout, publishing status updates.
+    """
     logger.info(f"Attempting direct BLE to {mac_address}...")
     ble_timeout = 60.0 # seconds - adjust as needed
     try:
         # Add timeout to the entire BLE operation
         async with asyncio.timeout(ble_timeout):
+            # Instantiate communicator without MQTT client
             communicator = BleCommunicator(mac_address)
+
+            # Publish status before connecting (connect happens in __aenter__)
+            await publish_status(client, mac_address, "connecting_ble")
+
             async with communicator: # Handles connect/disconnect
-                logger.info(f"Sending {len(packets_bytes_list)} packets via direct BLE...")
+                # Publish status before sending packets
+                await publish_status(client, mac_address, "sending_packets")
                 await communicator.send_packets(packets_bytes_list)
+                # Publish status after sending packets and internal wait
+                await publish_status(client, mac_address, "waiting_device") # Status after send_packets call (includes internal wait)
+
+            # Publish status after successful completion (after __aexit__)
+            await publish_status(client, mac_address, "ble_complete")
             logger.info(f"Image sent successfully via direct BLE to {mac_address}.")
             return {"status": "success", "method": "ble", "message": "Sent via direct BLE."}
     except asyncio.TimeoutError:
@@ -185,8 +198,8 @@ async def process_request(client: aiomqtt.Client, payload_str: str):
 
         # Execute based on operating mode
         if OPERATING_MODE == 'ble':
-            await publish_status(client, mac_address, "sending_ble")
-            result_payload = await attempt_direct_ble(mac_address, packets_bytes_list)
+            # Status updates are now handled within attempt_direct_ble
+            result_payload = await attempt_direct_ble(client, mac_address, packets_bytes_list)
         elif OPERATING_MODE == 'mqtt':
             await publish_status(client, mac_address, "publishing_mqtt")
             result_payload = await attempt_mqtt_publish(client, mac_address, packets_bytes_list, MQTT_EINK_TOPIC_BASE, EINK_PACKET_DELAY_MS)
@@ -204,8 +217,10 @@ async def process_request(client: aiomqtt.Client, payload_str: str):
         logger.exception("Unexpected error handling request.")
         result_payload = {"status": "error", "message": f"Unexpected internal error: {e}"}
 
-    # Publish final status to default topic
-    await publish_status(client, request_data.get("mac_address", "unknown") if request_data else "unknown", result_payload['status'], result_payload)
+    # Publish final result status to default topic (includes details from result_payload)
+    # Use the validated mac_address if available
+    final_mac = mac_address if 'mac_address' in locals() and mac_address else (request_data.get("mac_address", "unknown") if request_data else "unknown")
+    await publish_status(client, final_mac, result_payload.get('status', 'unknown_final_status'), result_payload)
 
     # Publish result if specific response topic was provided
     if response_topic:
