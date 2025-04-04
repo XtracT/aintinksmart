@@ -156,6 +156,7 @@ void loop() {
              Serial.printf(" -> Cleaning up state for completed/aborted transfer: %s\n", currentTargetMac.c_str());
              lastActionTime = 0;
              bleConnectRetries = 0;
+             packetsWrittenCount = 0; // Reset written count
              transferAborted = false; // Reset abort flag
              writingStatusPublished = false; // Reset writing status flag
              std::queue<std::vector<uint8_t>> empty;
