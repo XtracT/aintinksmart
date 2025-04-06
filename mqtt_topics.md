@@ -20,7 +20,12 @@ These topics handle direct interaction with the main Python service.
     *   **Direction:** Service -> Client(s)
     *   **Function:** The service publishes intermediate status updates (e.g., `processing_request`, `connecting_ble`) and the final result (`success` or `error`) for operations to this topic. This includes results from Direct BLE scans. Clients subscribe here to monitor progress.
     *   *Default Value:* `aintinksmart/service/status/default`
-
+    
+    *   **`<Mapped Topic>` (e.g., `mealiemate/image/kitchen`)**
+        *   **Direction:** Client -> Service
+        *   **Function:** If configured via the `MQTT_IMAGE_TOPIC_MAPPINGS` environment variable, the service listens on these custom topics for image requests. The target MAC address is derived from the mapping based on the topic the message was received on.
+        *   *Default Value:* None (configured via environment variable).
+        *   *Payload:* Raw image bytes (e.g., PNG file content). The `mode` is assumed to be `bwr`. `response_topic` is not supported for this method.
 ## Gateway Topics (`aintinksmart/gateway/...`)
 
 These topics handle communication specifically with the ESP32 gateway device when operating in **MQTT Gateway Mode**.

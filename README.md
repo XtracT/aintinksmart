@@ -14,10 +14,10 @@ For a detailed overview of the system components and their interactions, please 
 ## Description
 
 The service implements a communication protocol based on reverse engineering. It listens for requests on MQTT topics.
-- **Send Image:** When a request arrives, it takes the image data (base64 encoded), processes it, builds the necessary BLE packets, publishes status updates (e.g., "processing", "sending") to a default status topic, and attempts to send the packets using the configured method (Direct BLE or MQTT Gateway).
+- **Send Image:** When a request arrives (either via the default topic with JSON/base64 payload, or a mapped topic with raw bytes), it takes the image data, processes it, builds the necessary BLE packets, publishes status updates (e.g., "processing", "sending") to a default status topic, and attempts to send the packets using the configured method (Direct BLE or MQTT Gateway).
 - **Scan:** When a scan request arrives, it either performs a direct BLE scan or triggers a scan via the MQTT gateway, based on the configured mode.
 
-If a `response_topic` is included in the request payload, the service will publish a final status message (success/error or scan results/trigger confirmation) back to that specific topic after the attempt is complete.
+If a `response_topic` is included in the **default request topic's JSON payload**, the service will publish a final status message (success/error) back to that specific topic after the attempt is complete. `response_topic` is not supported for mapped topics receiving raw bytes.
 
 The core logic uses `aiomqtt` for asynchronous MQTT communication and `bleak` for direct BLE interactions.
 
@@ -45,11 +45,12 @@ The service is configured using environment variables when running the Docker co
 *   `MQTT_PORT` (Optional): Port of the MQTT broker (default: `1883`).
 *   `MQTT_USERNAME` (Optional): Username for MQTT authentication.
 *   `MQTT_PASSWORD` (Optional): Password for MQTT authentication.
-*   `MQTT_REQUEST_TOPIC` (Optional): Topic for image send requests (default: `aintinksmart/service/request/send_image`).
+*   `MQTT_REQUEST_TOPIC` (Optional): Topic for image send requests using JSON/base64 payload (default: `aintinksmart/service/request/send_image`).
 *   `MQTT_SCAN_REQUEST_TOPIC` (Optional): Topic for scan requests (default: `aintinksmart/service/request/scan`).
 *   `MQTT_DEFAULT_STATUS_TOPIC` (Optional): Topic for service status updates and direct BLE scan results (default: `aintinksmart/service/status/default`).
 *   `MQTT_GATEWAY_BASE_TOPIC` (Optional, for MQTT Gateway Mode): Base topic for communicating with the ESP32 gateway (default: `aintinksmart/gateway`). Commands are sent to specific sub-topics under this base. Gateway status and results are also published under this base. For a complete list and description of all MQTT topics, see [mqtt_topics.md](mqtt_topics.md).
 *   `EINK_PACKET_DELAY_MS` (Optional, for MQTT Gateway Mode): Delay in milliseconds between sending individual packet messages via MQTT to the custom firmware. Defaults to `20`.
+*   `MQTT_IMAGE_TOPIC_MAPPINGS` (Optional): A JSON string mapping specific MQTT topics to target MAC addresses. Allows receiving **raw image bytes** (e.g., PNG file content) directly on these topics. The service internally converts this to the expected base64 format. Example: `'{"mealiemate/image/kitchen": "AA:BB:CC:DD:EE:FF", "another/topic/office": "11:22:33:44:55:66"}'`. Defaults to `{}` (disabled). Images received via these topics are assumed to be `bwr` mode.
 
 **Note:** The service will exit on startup if a valid operating mode cannot be determined (e.g., `USE_GATEWAY=true` but `MQTT_BROKER` is not set, or `USE_GATEWAY=false` and `BLE_ENABLED=false`).
 
@@ -73,6 +74,7 @@ The service is configured using environment variables when running the Docker co
           # -e MQTT_SCAN_REQUEST_TOPIC=custom/scan/topic # Optional
           # -e MQTT_DEFAULT_STATUS_TOPIC=custom/status/topic # Optional
           # -e MQTT_GATEWAY_BASE_TOPIC=custom/gateway # Optional
+          # -e MQTT_IMAGE_TOPIC_MAPPINGS='{"topic/one":"MAC1", "topic/two":"MAC2"}' # Optional
           ble-sender-service
         ```
 
@@ -89,6 +91,7 @@ The service is configured using environment variables when running the Docker co
           # -e MQTT_REQUEST_TOPIC=custom/request/topic # Optional
           # -e MQTT_SCAN_REQUEST_TOPIC=custom/scan/topic # Optional
           # -e MQTT_DEFAULT_STATUS_TOPIC=custom/status/topic # Optional
+          # -e MQTT_IMAGE_TOPIC_MAPPINGS='{"topic/one":"MAC1", "topic/two":"MAC2"}' # Optional
           ble-sender-service
         ```
 
@@ -98,18 +101,26 @@ Communication primarily happens via MQTT messages. See [mqtt_topics.md](mqtt_top
 
 ### 1. Sending an Image
 
-*   **Via MQTT:**
-    Publish a JSON payload to the configured `MQTT_REQUEST_TOPIC` (default: `aintinksmart/service/request/send_image`).
-    ```json
-    {
-      "mac_address": "AA:BB:CC:DD:EE:FF",
-      "image_data": "base64_encoded_image_string_here...",
-      "mode": "bwr", // or "bw"
-      "response_topic": "optional/topic/for/result" // Optional
-    }
-    ```
-    Monitor the `MQTT_DEFAULT_STATUS_TOPIC` (default: `aintinksmart/service/status/default`) for intermediate status updates (JSON payload: `{"mac_address": "...", "status": "...", ...}`).
-    If `response_topic` is provided, monitor it for the final JSON result message.
+*   **Via MQTT (Two Methods):**
+
+    1.  **Default Request Topic:** Publish a JSON payload to the configured `MQTT_REQUEST_TOPIC` (default: `aintinksmart/service/request/send_image`). The MAC address *must* be included in the payload.
+        ```json
+        {
+          "mac_address": "AA:BB:CC:DD:EE:FF",
+          "image_data": "base64_encoded_image_string_here...",
+          "mode": "bwr", // or "bw"
+          "response_topic": "optional/topic/for/result" // Optional
+        }
+        ```
+
+    2.  **Mapped Image Topics:** If `MQTT_IMAGE_TOPIC_MAPPINGS` is configured, publish the **raw image bytes** (e.g., the content of a PNG file) directly as the payload to one of the topics defined as a key in the mapping. The MAC address is determined from the mapping based on the topic used. The image `mode` is assumed to be `bwr` for these topics. `response_topic` is **not supported** for this method.
+        ```bash
+        # Example: Publishing raw PNG data to "mealiemate/image/kitchen"
+        # (Using mosquitto_pub)
+        mosquitto_pub -h <broker> -t mealiemate/image/kitchen -f /path/to/image.png
+        ```
+
+    *   **Monitoring:** Monitor the `MQTT_DEFAULT_STATUS_TOPIC` (default: `aintinksmart/service/status/default`) for intermediate status updates (JSON payload: `{"mac_address": "...", "status": "...", ...}`). For MQTT Gateway mode, the service initially returns `gateway_start_sent`. You must monitor subsequent status updates (like `gateway_sending_packets`, `gateway_success`, `gateway_error_*`) relayed from the ESP32 on this topic to know the final outcome. If `response_topic` was provided *only* in the **Default Request Topic** payload, the final result (`success` or `error`) will also be published there.
 
 *   **Via CLI Script (`send_image_cli.py`):**
     (Requires Python and `paho-mqtt` installed locally: `pip install paho-mqtt`)

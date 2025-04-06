@@ -1,87 +1,150 @@
 # app/service.py
 """
 Handles MQTT connection, message routing, status publishing, and the main service loop.
+Supports default request topic (JSON/base64) and mapped topics (raw bytes).
 """
 import logging
 import asyncio
 import json
 import signal
-from typing import Optional, Dict, Any
+import base64 
+import binascii 
+from typing import Optional, Dict, Any, Callable, Coroutine, Literal
 
-import aiomqtt
+import aiomqtt 
+from pydantic import ValidationError
 
 # Import necessary components from other modules within the app package
-from .main import (
+from .main import ( 
     logger,
-    OPERATING_MODE,
-    MQTT_BROKER,
-    MQTT_PORT,
-    MQTT_USERNAME,
-    MQTT_PASSWORD,
-    MQTT_REQUEST_TOPIC,
-    MQTT_SCAN_REQUEST_TOPIC,
-    MQTT_DEFAULT_STATUS_TOPIC,
-    MQTT_GATEWAY_BASE_TOPIC,
-    GATEWAY_STATUS_WILDCARD,
-    gateway_ready_events,
+    gateway_ready_events, 
     gateway_ready_lock,
-    USE_GATEWAY # Needed? Not directly used here, but maybe indirectly via OPERATING_MODE logic? Let's keep for now.
+    MQTT_DEFAULT_STATUS_TOPIC # Import default topic for publish_status helper
 )
+# Import processing functions and publish_status helper
 from .processing import process_request, process_scan_request
+# Import publish_status from mqtt_utils
+from .mqtt_utils import publish_status 
+from .models import SendImageApiRequest 
 
+# Define a type alias for the publish status function for clarity
+# This matches the signature of the actual publish_status function
+PublishStatusFunc = Callable[[aiomqtt.Client, str, str, Optional[Dict], Optional[str]], Coroutine[Any, Any, None]] 
 
-async def publish_status(client: aiomqtt.Client, mac: str, status_msg: str, details: Optional[Dict] = None):
-    """Helper to publish status to the default topic."""
-    if not MQTT_DEFAULT_STATUS_TOPIC:
-        return # Don't attempt publish if topic isn't configured
-    try:
-        payload = {"mac_address": mac, "status": status_msg}
-        if details:
-            payload.update(details)
-        logger.debug(f"Publishing default status: {payload} to {MQTT_DEFAULT_STATUS_TOPIC}")
-        await client.publish(MQTT_DEFAULT_STATUS_TOPIC, payload=json.dumps(payload), qos=0) # Use QoS 0 for status messages
-    except Exception as e:
-        logger.error(f"Failed to publish default status: {e}")
+# Note: publish_status is now defined in mqtt_utils.py
 
-
-async def message_handler(client: aiomqtt.Client, stop_event: asyncio.Event):
+async def message_handler(
+    client: aiomqtt.Client, # The main client object
+    stop_event: asyncio.Event,
+    default_image_request_topic: str,
+    scan_request_topic: str,
+    image_topic_map: Dict[str, str],
+    gateway_status_wildcard: str,
+    default_status_topic: str, # Keep receiving it for direct calls to publish_status
+    gateway_base_topic: str 
+):
     """Handles incoming MQTT messages and processes them."""
     logger.info("Message handler task started.")
+        
     try:
         async for message in client.messages:
             if stop_event.is_set():
                 logger.info("Stop event set, stopping message handler.")
                 break
 
-            logger.info(f"Received message on topic: {message.topic}")
+            topic_str = message.topic.value
+            logger.info(f"Received message on topic: {topic_str}")
+
             try:
-                payload_str = message.payload.decode()
-                # Schedule request processing in background tasks
-                if message.topic.matches(MQTT_REQUEST_TOPIC):
-                     logger.debug("Creating background task for process_request")
-                     asyncio.create_task(process_request(client, payload_str, publish_status))
-                elif message.topic.matches(MQTT_SCAN_REQUEST_TOPIC):
-                     logger.debug("Creating background task for process_scan_request")
-                     asyncio.create_task(process_scan_request(client, payload_str, publish_status))
-                # --- Gateway Status Relay / Flow Control ---
-                elif message.topic.matches(GATEWAY_STATUS_WILDCARD):
-                    logger.debug(f"Received gateway status on {message.topic}")
+                # --- Request Topics ---
+                if topic_str == default_image_request_topic:
+                    logger.debug(f"Processing request on default topic: {topic_str}")
+                    payload_str = None
                     try:
+                        payload_str = message.payload.decode() 
+                        request_data = SendImageApiRequest.parse_raw(payload_str)
+                        try:
+                             base64.b64decode(request_data.image_data, validate=True)
+                        except (binascii.Error, ValueError) as b64_e:
+                             raise ValueError(f"Invalid base64 image data in payload: {b64_e}") from b64_e
+                        
+                        logger.info(f"Processing default image request for MAC: {request_data.mac_address}")
+                        # CORRECTED CALL: process_request expects only client, payload_str
+                        asyncio.create_task(process_request(
+                            client=client, 
+                            payload_str=payload_str 
+                        ))
+                    except (ValidationError, json.JSONDecodeError, UnicodeDecodeError, ValueError) as e:
+                        logger.error(f"Invalid payload on default topic {topic_str}: {e}")
+                    except Exception as e:
+                         logger.exception(f"Unexpected error processing default image request from topic {topic_str}")
+
+                elif topic_str in image_topic_map:
+                    mac = image_topic_map[topic_str]
+                    logger.debug(f"Processing request on mapped topic: {topic_str} for MAC: {mac}")
+                    try:
+                        image_bytes = message.payload 
+                        if not image_bytes:
+                             raise ValueError("Received empty payload on mapped image topic.")
+                        image_data_b64 = base64.b64encode(image_bytes).decode('ascii')
+                        payload_dict = {
+                            "mac_address": mac,
+                            "image_data": image_data_b64,
+                            "mode": "bwr" 
+                        }
+                        payload_str = json.dumps(payload_dict)
+                        logger.info(f"Processing mapped image request for MAC: {mac}")
+                        # CORRECTED CALL: process_request expects only client, payload_str
+                        asyncio.create_task(process_request(
+                            client=client, 
+                            payload_str=payload_str
+                        ))
+                    except ValueError as e: 
+                        logger.error(f"Invalid payload on mapped topic {topic_str} for MAC {mac}: {e}")
+                        await publish_status(client, mac, "error", {"message": str(e)}, default_status_topic=default_status_topic) 
+                    except Exception as e:
+                         logger.exception(f"Unexpected error processing mapped image request from topic {topic_str} for MAC {mac}")
+                         await publish_status(client, mac, "error", {"message": f"Internal server error processing request."}, default_status_topic=default_status_topic) 
+
+                elif topic_str == scan_request_topic:
+                     logger.debug("Creating background task for process_scan_request")
+                     payload_str = None
+                     try:
+                         payload_str = message.payload.decode() 
+                         # CORRECTED CALL: process_scan_request expects only client, payload_str
+                         asyncio.create_task(process_scan_request(
+                             client, 
+                             payload_str 
+                         ))
+                     except UnicodeDecodeError as e:
+                          logger.error(f"Failed to decode payload as UTF-8 on scan topic {topic_str}: {e}")
+                     except Exception as e:
+                          logger.exception(f"Unexpected error processing scan request from topic {topic_str}")
+
+                # --- Gateway Status Topic ---
+                elif message.topic.matches(gateway_status_wildcard):
+                    logger.debug(f"Received gateway status on {message.topic}")
+                    payload_str = None
+                    try:
+                        payload_str = message.payload.decode() 
                         topic_parts = message.topic.value.split('/')
                         if len(topic_parts) == 5 and topic_parts[2] == 'display' and topic_parts[4] == 'status':
                             mac_no_colons = topic_parts[3]
                             mac_with_colons = ':'.join(mac_no_colons[i:i+2] for i in range(0, len(mac_no_colons), 2)).upper()
 
                             logger.debug(f"Gateway status payload for {mac_with_colons}: '{payload_str}'")
+
+                            # --- Handle connected_ble using Event (Original Sync Logic) ---
                             if payload_str == "connected_ble":
                                 async with gateway_ready_lock:
                                     if mac_with_colons in gateway_ready_events:
                                         event_to_set = gateway_ready_events[mac_with_colons]
                                         logger.info(f"Gateway {mac_with_colons} reported connected_ble. Signaling Event ID: {id(event_to_set)}.")
-                                        event_to_set.set()
+                                        event_to_set.set() 
                                     else:
-                                        logger.warning(f"Received connected_ble for {mac_with_colons}, but no task was waiting in gateway_ready_events.")
-
+                                        logger.warning(f"Received connected_ble for {mac_with_colons}, but no corresponding event was found in gateway_ready_events (likely timed out).")
+                            
+                            # --- Relay Status ---
                             relayed_payload = {
                                 "mac_address": mac_with_colons,
                                 "source": "gateway",
@@ -96,18 +159,23 @@ async def message_handler(client: aiomqtt.Client, stop_event: asyncio.Event):
                                 relayed_payload["status"] = f"gateway_{payload_str}"
 
                             logger.info(f"Relaying gateway status for {mac_with_colons}: {payload_str}")
-                            # Publish the relayed status
-                            await client.publish(MQTT_DEFAULT_STATUS_TOPIC, payload=json.dumps(relayed_payload), qos=0)
-
+                            # Call publish_status directly, passing client and default_status_topic
+                            await publish_status(client, mac_with_colons, f"gateway_{payload_str}", relayed_payload, default_status_topic=default_status_topic) 
 
                         else:
                             logger.warning(f"Could not parse MAC from gateway status topic: {message.topic}")
+                    except UnicodeDecodeError as e:
+                         logger.error(f"Failed to decode gateway status payload as UTF-8 on topic {topic_str}: {e}")
                     except Exception as relay_error:
-                        logger.exception(f"Error relaying gateway status from topic {message.topic}: {relay_error}")
+                        logger.exception(f"Error processing gateway status from topic {message.topic}: {relay_error}")
+
                 else:
-                     logger.warning(f"Received message on unexpected topic: {message.topic}")
+                     logger.warning(f"Received message on unhandled topic: {topic_str}")
+
+            # Catch errors outside specific topic handling (e.g., initial access to message.payload)
             except Exception as e:
-                 logger.exception(f"Error processing message from topic {message.topic}")
+                 logger.exception(f"Outer error processing message from topic {topic_str}")
+
             if stop_event.is_set():
                 logger.info("Stop event set after processing, stopping message handler.")
                 break
@@ -119,13 +187,32 @@ async def message_handler(client: aiomqtt.Client, stop_event: asyncio.Event):
          logger.info("Message handler task finished.")
 
 
-async def run_service():
+async def run_service(
+    mqtt_broker: str,
+    mqtt_port: int,
+    mqtt_username: Optional[str],
+    mqtt_password: Optional[str],
+    operating_mode: Optional[Literal['mqtt', 'ble']],
+    default_image_request_topic: str,
+    scan_request_topic: str,
+    default_status_topic: str,
+    gateway_base_topic: str,
+    gateway_status_wildcard: str,
+    eink_packet_delay_ms: int, 
+    image_topic_map: Dict[str, str]
+):
     """Main service loop connecting to MQTT and managing tasks."""
-    logger.info(f"Starting headless service in '{OPERATING_MODE}' mode.")
-    logger.info(f"Listening for image requests on: {MQTT_REQUEST_TOPIC}")
-    logger.info(f"Listening for scan requests on: {MQTT_SCAN_REQUEST_TOPIC}")
+    if not operating_mode: 
+        logger.error("Cannot run service, invalid operating mode.")
+        return
 
-    reconnect_interval = 5 # seconds
+    logger.info(f"Starting headless service in '{operating_mode}' mode.")
+    logger.info(f"Listening for default image requests on: {default_image_request_topic}")
+    logger.info(f"Listening for scan requests on: {scan_request_topic}")
+    if image_topic_map:
+        logger.info(f"Listening for mapped image requests on: {list(image_topic_map.keys())}")
+
+    reconnect_interval = 5 
     stop_event = asyncio.Event()
 
     loop = asyncio.get_running_loop()
@@ -139,21 +226,37 @@ async def run_service():
         message_handler_task = None
         try:
             async with aiomqtt.Client(
-                hostname=MQTT_BROKER,
-                port=MQTT_PORT,
-                username=MQTT_USERNAME,
-                password=MQTT_PASSWORD,
-            ) as client:
+                hostname=mqtt_broker,
+                port=mqtt_port,
+                username=mqtt_username,
+                password=mqtt_password,
+            ) as client: 
                 logger.info("MQTT client connected.")
-                await client.subscribe(MQTT_REQUEST_TOPIC, qos=1)
-                await client.subscribe(MQTT_SCAN_REQUEST_TOPIC, qos=1)
-                logger.info(f"Subscribed to service request topics.")
-                if OPERATING_MODE == 'mqtt':
-                     await client.subscribe(GATEWAY_STATUS_WILDCARD, qos=0)
-                     logger.info(f"Subscribed to gateway status topic: {GATEWAY_STATUS_WILDCARD}")
+                
+                topics_to_subscribe = [
+                    (scan_request_topic, 1),
+                    (default_image_request_topic, 1),
+                ]
+                for topic in image_topic_map.keys():
+                    topics_to_subscribe.append((topic, 1))
+                
+                if operating_mode == 'mqtt':
+                    topics_to_subscribe.append((gateway_status_wildcard, 0))
 
-                # Start the message handler task
-                message_handler_task = asyncio.create_task(message_handler(client, stop_event))
+                for topic, qos in topics_to_subscribe:
+                    await client.subscribe(topic, qos=qos)
+                    logger.info(f"Subscribed to topic: {topic} (QoS: {qos})")
+
+                message_handler_task = asyncio.create_task(message_handler(
+                    client, 
+                    stop_event,
+                    default_image_request_topic,
+                    scan_request_topic,
+                    image_topic_map,
+                    gateway_status_wildcard,
+                    default_status_topic, 
+                    gateway_base_topic 
+                ))
 
                 stop_wait_task = asyncio.create_task(stop_event.wait())
 
@@ -171,7 +274,6 @@ async def run_service():
                     except Exception as e:
                          logger.exception("Exception from message handler task:")
 
-                # Handle stop event
                 if stop_wait_task in done:
                      logger.info("Stop event received, cancelling message handler task.")
                      if message_handler_task in pending:
