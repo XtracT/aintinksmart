@@ -1,0 +1,57 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up Ain't Ink Smart Display",
+        "description": "Choose a discovered device or enter the MAC address manually.",
+        "menu_options": {
+          "pick_device": "Choose a discovered device",
+          "manual_entry": "Enter MAC address manually"
+        },
+        "data": {
+          "mac_address": "MAC Address"
+        }
+      },
+      "pick_device": {
+        "title": "Select Discovered Device",
+        "data": {
+          "address": "Device"
+        }
+      },
+      "manual_entry": {
+        "title": "Enter MAC Address Manually",
+        "data": {
+          "mac_address": "MAC Address (e.g., AA:BB:CC:DD:EE:FF)"
+        }
+      },
+      "bluetooth_confirm": {
+        "title": "Confirm Discovered Device",
+        "description": "Do you want to set up the Ain't Ink Smart display named '{name}'?"
+      }
+    },
+    "error": {
+      "invalid_mac": "Invalid MAC address format. Please use XX:XX:XX:XX:XX:XX.",
+      "cannot_connect": "Unable to connect to the device. Ensure it's powered on and in range.",
+      "unknown": "An unknown error occurred.",
+      "discovery_error": "An error occurred during device discovery."
+    },
+    "abort": {
+      "already_configured": "Device is already configured.",
+      "not_supported": "Device not supported by this integration (check name/advertisement).",
+      "discovery_error": "An error occurred during device discovery."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Ain't Ink Smart Options",
+        "data": {
+          "packet_delay": "Packet Delay (seconds, e.g., 0.02)"
+        }
+      }
+    },
+    "error": {
+        "invalid_delay": "Invalid packet delay value. Must be a positive number."
+    }
+  }
+}
