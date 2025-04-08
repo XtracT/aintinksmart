@@ -79,7 +79,6 @@ class AintinksmartConfigFlow(ConfigFlow, domain=DOMAIN):
                 step_id="user",  # Keep step_id as user for submission handling
                 data_schema=vol.Schema({vol.Required(CONF_MAC): str}),
                 errors=errors,
-                title="Set up Ain't Ink Smart Display",
                 description="No compatible devices discovered. Please enter the MAC address manually.",
             )
 
@@ -123,7 +122,6 @@ class AintinksmartConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="user",  # Submit back to user step handler
             data_schema=vol.Schema({vol.Required(CONF_MAC): str}),
-            title="Set up Ain't Ink Smart Display",
             description="Please enter the MAC address.",
         )
 
@@ -156,7 +154,6 @@ class AintinksmartConfigFlow(ConfigFlow, domain=DOMAIN):
              # Show the confirmation form
              return self.async_show_form(
                  step_id="bluetooth_confirm",
-                 title="Confirm Discovered Device",
                  description="Do you want to set up the Ain't Ink Smart display named '{name}'?".format(
                      name=self.context.get("title_placeholders", {}).get("name", "")
                  ),
