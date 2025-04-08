@@ -71,13 +71,19 @@ class AintinksmartDevice:
         self._last_error: str | None = None
         self._last_update: datetime | None = None
         self._last_image_bytes: bytes | None = None
-        self._send_lock = asyncio.Lock() # Prevent concurrent sends
-        self._update_listeners: list[callable] = [] # Simple listener pattern for now
+        self._send_lock = asyncio.Lock()  # Prevent concurrent sends
+        self._update_listeners: list[callable] = []  # Simple listener pattern for now
         self._cancel_bluetooth_callback: callable | None = None
 
         self._image_processor = ImageProcessor()
         self._protocol_formatter = ProtocolFormatter()
         self._packet_builder = PacketBuilder()
+
+        # Options and listeners for auto-update
+        self._options = dict(entry.options)
+        self._cancel_state_listener: callable | None = None
+        self._options_update_remove: callable | None = None
+        self._options_update_remove = entry.add_update_listener(self._handle_options_update)
 
     @property
     def is_available(self) -> bool:
@@ -110,6 +116,9 @@ class AintinksmartDevice:
             self.hass, self._handle_bluetooth_update, {"address": self.mac_address.upper()}, mode="active"
         )
         self._update_state(STATE_IDLE if self.is_available else HA_STATE_UNAVAILABLE)
+
+        # Setup source listener and trigger initial update if enabled
+        self._setup_source_listener()
 
     @callback
     def _handle_bluetooth_update(
@@ -189,64 +198,57 @@ class AintinksmartDevice:
             else:
                 _LOGGER.error("[%s] Service call missing image_data or image_entity_id", self.mac_address)
                 self._update_state(STATE_ERROR, "No image source provided")
-                return # Abort send
+    async def _async_send_image_internal(self, image_bytes: bytes, mode: str) -> bool:
+        """Process, format, build packets, and send image via BLE. Return True on success."""
+        self._update_state(STATE_CONNECTING)
+        success = False
+        try:
+            async with async_timeout.timeout(SEND_TIMEOUT):
+                # 1. Process Image
+                _LOGGER.debug("[%s] Processing image...", self.mac_address)
+                processed_data = self._image_processor.process_image(image_bytes, mode)
 
-            if not image_bytes:
-                 _LOGGER.error("[%s] Image data is empty after processing input", self.mac_address)
-                 self._update_state(STATE_ERROR, "Image data is empty")
-                 return # Abort send
+                # 2. Format Payload
+                _LOGGER.debug("[%s] Formatting payload...", self.mac_address)
+                hex_payload = self._protocol_formatter.format_payload(processed_data)
 
-            # --- Start actual send process ---
-            self._update_state(STATE_CONNECTING)
-            success = False
-            try:
-                async with async_timeout.timeout(SEND_TIMEOUT):
-                    # 1. Process Image
-                    _LOGGER.debug("[%s] Processing image...", self.mac_address)
-                    processed_data = self._image_processor.process_image(image_bytes, mode)
+                # 3. Build Packets
+                _LOGGER.debug("[%s] Building packets...", self.mac_address)
+                packets = self._packet_builder.build_packets(hex_payload, self.mac_address)
 
-                    # 2. Format Payload
-                    _LOGGER.debug("[%s] Formatting payload...", self.mac_address)
-                    hex_payload = self._protocol_formatter.format_payload(processed_data)
+                # 4. Send via BLE
+                self._update_state(STATE_SENDING)
+                if self._ble_device is None:
+                    raise BleCommunicationError("BLE device became unavailable before sending")
 
-                    # 3. Build Packets
-                    _LOGGER.debug("[%s] Building packets...", self.mac_address)
-                    packets = self._packet_builder.build_packets(hex_payload, self.mac_address)
+                success = await async_send_packets_ble(self.hass, self._ble_device, packets)
 
-                    # 4. Send via BLE
-                    self._update_state(STATE_SENDING)
-                    if self._ble_device is None: # Re-check availability
-                         raise BleCommunicationError("BLE device became unavailable before sending")
+            if success:
+                self._update_state(STATE_SUCCESS)
+                self._last_image_bytes = image_bytes  # Store for camera on success
+            else:
+                self._update_state(STATE_ERROR, "Sending failed (unknown reason)")
 
-                    success = await async_send_packets_ble(self.hass, self._ble_device, packets)
-
-                if success:
-                    self._update_state(STATE_SUCCESS)
-                    self._last_image_bytes = image_bytes # Store for camera on success
+        except (
+            ImageProcessingError,
+            ProtocolFormattingError,
+            PacketBuilderError,
+            BleCommunicationError,
+            BleakError,
+            asyncio.TimeoutError,
+        ) as e:
+            _LOGGER.error("[%s] Send operation failed: %s", self.mac_address, e)
+            self._update_state(STATE_ERROR, f"Send failed: {e}")
+        except Exception as e:
+            _LOGGER.exception("[%s] Unexpected error during send operation", self.mac_address)
+            self._update_state(STATE_ERROR, f"Unexpected error: {e}")
+        finally:
+            if self._status in [STATE_CONNECTING, STATE_SENDING] and not success:
+                if not self._last_error:
+                    self._update_state(STATE_ERROR, "Send operation did not complete")
                 else:
-                    # Should not happen if async_send_packets_ble raises on failure
-                    self._update_state(STATE_ERROR, "Sending failed (unknown reason)")
-
-            except (
-                ImageProcessingError,
-                ProtocolFormattingError,
-                PacketBuilderError,
-                BleCommunicationError,
-                BleakError, # Catch BleakError directly too
-                asyncio.TimeoutError,
-            ) as e:
-                _LOGGER.error("[%s] Send operation failed: %s", self.mac_address, e)
-                self._update_state(STATE_ERROR, f"Send failed: {e}")
-            except Exception as e:
-                _LOGGER.exception("[%s] Unexpected error during send operation", self.mac_address)
-                self._update_state(STATE_ERROR, f"Unexpected error: {e}")
-            finally:
-                 # Ensure state is not left as connecting/sending if an error occurred
-                 if self._status in [STATE_CONNECTING, STATE_SENDING] and not success:
-                      if not self._last_error: # Avoid overwriting specific error
-                           self._update_state(STATE_ERROR, "Send operation did not complete")
-                      else:
-                           self._update_state(STATE_ERROR, self._last_error) # Keep existing error
+                    self._update_state(STATE_ERROR, self._last_error)
+        return success
 
 
     @callback
@@ -283,5 +285,113 @@ class AintinksmartDevice:
         if self._cancel_bluetooth_callback:
             self._cancel_bluetooth_callback()
             self._cancel_bluetooth_callback = None
+        if self._cancel_state_listener:
+            self._cancel_state_listener()
+            self._cancel_state_listener = None
+        if self._options_update_remove:
+            self._options_update_remove()
+            self._options_update_remove = None
         # Cancel any pending tasks if necessary (e.g., if using background tasks)
         self._update_listeners.clear()
+
+    async def _handle_options_update(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        """Handle options update."""
+        _LOGGER.debug("[%s] Options updated, reloading options and listeners", self.mac_address)
+        self._options = dict(entry.options)
+        self._setup_source_listener()
+
+    def _setup_source_listener(self) -> None:
+        """Set up or cancel the state listener for the source image entity."""
+        from homeassistant.helpers.event import async_track_state_change_event
+        from homeassistant.helpers import entity_registry as er
+
+        # Cancel existing listener if any
+        if self._cancel_state_listener:
+            self._cancel_state_listener()
+            self._cancel_state_listener = None
+
+        # Find the source select entity
+        ent_reg = er.async_get(self.hass)
+        source_select_unique_id = f"{self.entry.entry_id}_source_entity"
+        source_select_entity_id = ent_reg.async_get_entity_id("select", DOMAIN, source_select_unique_id)
+
+        if not source_select_entity_id:
+            _LOGGER.warning("[%s] Source select entity not found in registry, cannot listen for changes.", self.mac_address)
+            return
+
+        # Always listen to the source select entity itself
+        _LOGGER.info("[%s] Listening for changes to source select entity: %s", self.mac_address, source_select_entity_id)
+        self._cancel_state_listener = async_track_state_change_event(
+            self.hass,
+            [source_select_entity_id],
+            self._handle_source_select_update, # Listen to the select entity, not the source directly
+        )
+
+    async def _handle_source_select_update(self, event) -> None:
+        """Handle state change of the source select entity."""
+        new_state = event.data.get("new_state")
+        if not new_state or not new_state.state or new_state.state in ("unknown", "unavailable"):
+            _LOGGER.warning("[%s] Source select entity changed to an invalid state: %s", self.mac_address, new_state)
+            return
+
+        source_entity_id = new_state.state
+        _LOGGER.info("[%s] Source select entity changed to %s, triggering update check.", self.mac_address, source_entity_id)
+
+        # Get mode from mode select entity
+        mode_select_entity_id = f"select.{self.formatted_mac.replace(':', '').lower()}_update_mode"
+        mode_state = self.hass.states.get(mode_select_entity_id)
+        mode = "bwr"
+        if mode_state and mode_state.state in ("bw", "bwr"):
+            mode = mode_state.state
+
+        # Trigger update (which includes the check for differences)
+        await self._trigger_update_from_source(source_entity_id, mode)
+
+    async def _trigger_update_from_source(self, source_entity_id: str, mode: str) -> None:
+        """Fetch image from source entity and send it if different from last uploaded."""
+        if not self.is_available:
+            _LOGGER.warning("[%s] Device unavailable, skipping auto-update", self.mac_address)
+            return
+        if self._send_lock.locked():
+            _LOGGER.warning("[%s] Send operation already in progress, skipping auto-update", self.mac_address)
+            return
+
+        async with self._send_lock:
+            try:
+                image_state = self.hass.states.get(source_entity_id)
+                if image_state is None:
+                    _LOGGER.error("[%s] Source entity not found: %s", self.mac_address, source_entity_id)
+                    return
+                image_url = image_state.attributes.get("entity_picture")
+                if not image_url:
+                    _LOGGER.error("[%s] No entity_picture attribute in source entity: %s", self.mac_address, source_entity_id)
+                    return
+                if image_url.startswith("/"):
+                    try:
+                        from homeassistant.helpers.network import get_url
+                        base_url = get_url(self.hass)
+                    except Exception:
+                        base_url = self.hass.config.internal_url or self.hass.config.external_url or ""
+                    image_url = f"{base_url}{image_url}"
+                session = aiohttp_client.async_get_clientsession(self.hass)
+                async with async_timeout.timeout(10):
+                    response = await session.get(image_url)
+                    response.raise_for_status()
+                    image_bytes = await response.read()
+                _LOGGER.info("[%s] Fetched %d bytes from source entity %s", self.mac_address, len(image_bytes), source_entity_id)
+            except Exception as e:
+                _LOGGER.error("[%s] Failed to fetch image from source entity %s: %s", self.mac_address, source_entity_id, e)
+                self._update_state(STATE_ERROR, f"Fetch failed: {e}")
+                return
+
+            # Compare with last uploaded image
+            if self._last_image_bytes is not None and self._last_image_bytes == image_bytes:
+                _LOGGER.info("[%s] Source image unchanged, skipping update", self.mac_address)
+                return
+
+            # Call internal send method
+            success = await self._async_send_image_internal(image_bytes, mode)
+            if success:
+                _LOGGER.info("[%s] Auto-update successful", self.mac_address)
+            else:
+                _LOGGER.warning("[%s] Auto-update failed", self.mac_address)

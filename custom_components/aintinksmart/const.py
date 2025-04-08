@@ -7,7 +7,9 @@ DOMAIN: Final = "aintinksmart"
 
 PLATFORMS: Final = [
     Platform.SENSOR,
-    Platform.CAMERA, # Optional, based on plan
+    Platform.CAMERA,
+    Platform.BUTTON,
+    Platform.SELECT,
 ]
 
 # Configuration keys

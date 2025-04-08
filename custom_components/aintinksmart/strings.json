@@ -45,6 +45,7 @@
     "step": {
       "init": {
         "title": "Ain't Ink Smart Options",
+        "description": "Configure automatic updates from a source image entity.",
         "data": {
           "packet_delay": "Packet Delay (seconds, e.g., 0.02)"
         }

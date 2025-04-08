@@ -52,7 +52,10 @@ class AintinksmartConfigFlow(ConfigFlow, domain=DOMAIN):
                 else:
                     await self.async_set_unique_id(format_mac(address), raise_on_progress=False)
                     self._abort_if_unique_id_configured()
-                    return self._async_create_entry(title=f"{DEFAULT_NAME} {address}", mac=address)
+                    return self._async_create_entry(
+                        title=f"{DEFAULT_NAME} {address}",
+                        mac=address,
+                    )
             else:
                 # This case might occur if the form schema changes unexpectedly
                 errors["base"] = "unknown_error"
@@ -172,6 +175,6 @@ class AintinksmartConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_create_entry(
             title=title,
             data={
-                CONF_MAC: mac, # Store the non-formatted MAC
+                CONF_MAC: mac,  # Store the non-formatted MAC
             },
         )
