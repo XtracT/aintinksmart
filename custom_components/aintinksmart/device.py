@@ -118,6 +118,14 @@ class AintinksmartDevice:
         self._update_state(STATE_IDLE if self.is_available else HA_STATE_UNAVAILABLE)
 
         # Setup source listener and trigger initial update if enabled
+        # Defer listener setup until HA is fully started
+        self.hass.bus.async_listen_once(
+            "homeassistant_started", self._async_post_startup
+        )
+
+    async def _async_post_startup(self, event):
+        """Set up listeners after HA has started."""
+        _LOGGER.debug("[%s] Home Assistant started, setting up listeners", self.mac_address)
         self._setup_source_listener()
 
     @callback

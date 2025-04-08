@@ -42,7 +42,9 @@ async def async_setup_entry(
     async_add_entities(cameras)
 
 
-class AintinksmartCamera(AintinksmartEntity, Camera):
+from homeassistant.helpers.restore_state import RestoreEntity
+
+class AintinksmartCamera(AintinksmartEntity, Camera, RestoreEntity):
     """Representation of an Ain't Ink Smart Camera entity."""
 
     entity_description = CAMERA_DESCRIPTION # Assign description
@@ -54,6 +56,21 @@ class AintinksmartCamera(AintinksmartEntity, Camera):
         AintinksmartEntity.__init__(self, device_manager)
         Camera.__init__(self) # Call Camera base __init__
         # Unique ID is now handled by the base class using entity_description.key
+        self._last_image_bytes: bytes | None = None
+
+    async def async_added_to_hass(self) -> None:
+        """Handle entity which will be added."""
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state and "last_image_bytes_b64" in last_state.attributes:
+            try:
+                import base64
+                self._last_image_bytes = base64.b64decode(last_state.attributes["last_image_bytes_b64"])
+                # Also update the manager's state
+                self._manager._last_image_bytes = self._last_image_bytes
+                _LOGGER.debug("Restored last image for %s", self._mac_address)
+            except Exception as e:
+                _LOGGER.error("Error decoding restored image: %s", e)
 
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
@@ -61,7 +78,17 @@ class AintinksmartCamera(AintinksmartEntity, Camera):
         """Return bytes of camera image."""
         # Get image bytes directly from the device manager's state data property
         _LOGGER.debug("Fetching camera image for %s", self._mac_address)
-        return self._manager.state_data.get("last_image_bytes")
+        # Return the manager's state, which might have been restored
+        self._last_image_bytes = self._manager.state_data.get("last_image_bytes")
+        return self._last_image_bytes
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return the state attributes."""
+        if self._last_image_bytes:
+            import base64
+            return {"last_image_bytes_b64": base64.b64encode(self._last_image_bytes).decode("utf-8")}
+        return None
 
     # No need for _handle_coordinator_update here anymore,
     # the base class handles async_write_ha_state via the listener pattern
