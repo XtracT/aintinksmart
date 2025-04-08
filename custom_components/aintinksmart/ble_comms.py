@@ -58,35 +58,61 @@ async def async_send_packets_ble(
             max_attempts=3 # Number of connection attempts
         )
 
-        async with client:
-            _LOGGER.info("Connected to %s", ble_device.address)
+        packets_sent_successfully = False
+        try:
+            async with client:
+                _LOGGER.info("Connected to %s", ble_device.address)
 
-            # Find the characteristic
-            img_char: BleakGATTCharacteristic | None = client.services.get_characteristic(IMG_CHAR_UUID)
-            if img_char is None:
-                _LOGGER.error("Image characteristic %s not found on device %s", IMG_CHAR_UUID, ble_device.address)
-                raise BleCommunicationError(f"Characteristic {IMG_CHAR_UUID} not found")
+                # Find the characteristic
+                img_char: BleakGATTCharacteristic | None = client.services.get_characteristic(IMG_CHAR_UUID)
+                if img_char is None:
+                    _LOGGER.error("Image characteristic %s not found on device %s", IMG_CHAR_UUID, ble_device.address)
+                    raise BleCommunicationError(f"Characteristic {IMG_CHAR_UUID} not found")
 
-            _LOGGER.debug("Found characteristic: %s", img_char.uuid)
+                _LOGGER.debug("Found characteristic: %s", img_char.uuid)
 
-            # Send packets one by one with a delay
-            for i, packet in enumerate(packets):
-                try:
-                    # response=False as we don't expect a response for writes here
-                    await client.write_gatt_char(img_char, packet, response=False)
-                    _LOGGER.debug("Sent packet %d/%d (%d bytes) to %s", i + 1, len(packets), len(packet), ble_device.address)
-                    # Add a small delay between packets if required by the device protocol
-                    if PACKET_DELAY > 0:
-                        await asyncio.sleep(PACKET_DELAY)
-                except BleakError as e:
-                    _LOGGER.error("BleakError sending packet %d to %s: %s", i + 1, ble_device.address, e)
-                    raise BleCommunicationError(f"BLE write error: {e}") from e
-                except Exception as e:
-                    _LOGGER.error("Unexpected error sending packet %d to %s: %s", i + 1, ble_device.address, e)
-                    raise BleCommunicationError(f"Unexpected write error: {e}") from e
+                # Send packets one by one with a delay
+                for i, packet in enumerate(packets):
+                    try:
+                        # response=False as we don't expect a response for writes here
+                        await client.write_gatt_char(img_char, packet, response=False)
+                        _LOGGER.debug("Sent packet %d/%d (%d bytes) to %s", i + 1, len(packets), len(packet), ble_device.address)
+                        # Add a small delay between packets if required by the device protocol
+                        if PACKET_DELAY > 0:
+                            await asyncio.sleep(PACKET_DELAY)
+                    except BleakError as e:
+                        _LOGGER.error("BleakError sending packet %d to %s: %s", i + 1, ble_device.address, e)
+                        raise BleCommunicationError(f"BLE write error: {e}") from e
+                    except Exception as e:
+                        _LOGGER.error("Unexpected error sending packet %d to %s: %s", i + 1, ble_device.address, e)
+                        raise BleCommunicationError(f"Unexpected write error: {e}") from e
 
-            _LOGGER.info("Successfully sent all %d packets to %s", len(packets), ble_device.address)
-            return True
+                _LOGGER.info("Successfully sent all %d packets to %s", len(packets), ble_device.address)
+                packets_sent_successfully = True
+                # Disconnect happens implicitly on exiting 'async with client'
+
+        except EOFError:
+            # If EOFError happens during disconnect AFTER sending packets, log warning but consider it success
+            if packets_sent_successfully:
+                _LOGGER.warning("EOFError during disconnect after successful packet send to %s. Assuming success.", ble_device.address)
+                return True
+            else:
+                _LOGGER.error("EOFError during BLE operation with %s before all packets were sent.", ble_device.address)
+                raise BleCommunicationError("EOFError during BLE communication") from EOFError
+        # Re-raise other exceptions caught by the outer try/except
+        except BleCommunicationError:
+             raise # Re-raise our custom error
+        except BleakError as e:
+             _LOGGER.error("BleakError during BLE operation with %s: %s", ble_device.address, e)
+             raise BleCommunicationError(f"BLE communication failed: {e}") from e
+        except asyncio.TimeoutError:
+             _LOGGER.error("Timeout during BLE operation with %s", ble_device.address)
+             raise BleCommunicationError("BLE communication timed out") from asyncio.TimeoutError
+        except Exception as e:
+             _LOGGER.exception("Unexpected error during BLE operation with %s: %s", ble_device.address, e)
+             raise BleCommunicationError(f"Unexpected BLE error: {e}") from e
+
+        return packets_sent_successfully
 
     except BleakError as e:
         _LOGGER.error("BleakError during BLE operation with %s: %s", ble_device.address, e)
