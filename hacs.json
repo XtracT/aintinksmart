@@ -1,0 +1,7 @@
+{
+  "name": "AintInkSmart E-Ink Display",
+  "content_in_root": false,
+  "domains": ["sensor", "camera", "button", "select"],
+  "country": ["US"],
+  "render_readme": true
+}

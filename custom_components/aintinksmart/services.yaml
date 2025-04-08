@@ -1,0 +1,65 @@
+# Existing send_image service
+send_image:
+  name: Send Image
+  description: Send an image to the Ain't Ink Smart display.
+  fields:
+    image_data:
+      name: Image Data (Base64)
+      description: Base64-encoded image data to send.
+      required: false
+      example: "iVBORw0KGgoAAAANSUhEUgAA..."
+    image_entity_id:
+      name: Image Entity ID
+      description: Entity ID of an image entity to fetch the image from.
+      required: false
+      example: "camera.my_camera"
+    mode:
+      name: Mode
+      description: Color mode, either 'bw' or 'bwr'.
+      required: true
+      example: "bwr"
+
+force_update:
+  name: Force Update from Source
+  description: Force upload the configured source image entity to the display, regardless of whether it changed.
+  fields:
+    entity_id:
+      name: Target Device Entity ID
+      description: The entity ID of the Ain't Ink Smart device to update.
+      required: true
+      example: "camera.aint_ink_smart_display"
+# Describes the format for calling the services for the aintinksmart integration.
+
+send_image:
+  name: Send Image
+  description: Sends an image to the Ain't Ink Smart e-ink display. Provide either image_data (base64) or image_entity_id.
+  target:
+    entity:
+      integration: aintinksmart
+      # Can target specific domains if needed, e.g., sensor or camera
+      # domain: sensor
+  fields:
+    image_data:
+      name: Image Data (Base64)
+      description: Base64 encoded string of the image data. Mutually exclusive with Image Entity ID.
+      example: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+      selector:
+        text:
+          multiline: true
+    image_entity_id:
+      name: Image Entity ID
+      description: The entity_id of a Home Assistant 'image' entity to fetch the image from. Mutually exclusive with Image Data.
+      example: image.my_generated_picture
+      selector:
+        entity:
+          domain: image
+    mode:
+      name: Color Mode
+      description: The color mode for image processing ('bw' for black/white, 'bwr' for black/white/red).
+      required: true
+      example: bwr
+      selector:
+        select:
+          options:
+            - "bw"
+            - "bwr"
