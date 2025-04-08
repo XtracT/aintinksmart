@@ -73,17 +73,21 @@ class AintinksmartConfigFlow(ConfigFlow, domain=DOMAIN):
         if not self._discovered_devices:
             # No devices discovered, show only manual entry form
             return self.async_show_form(
-                step_id="user", # Keep step_id as user for submission handling
+                step_id="user",  # Keep step_id as user for submission handling
                 data_schema=vol.Schema({vol.Required(CONF_MAC): str}),
                 errors=errors,
-                description_placeholders={"message": "No compatible devices discovered. Please enter the MAC address manually."},
+                title="Set up Ain't Ink Smart Display",
+                description="No compatible devices discovered. Please enter the MAC address manually.",
             )
 
         # Devices discovered, show menu to pick or enter manually
         # Rely on strings.json for title and description based on step_id
         return self.async_show_menu(
             step_id="user",
-            menu_options=["pick_device", "manual_entry"],
+            menu_options={
+                "pick_device": "Choose a discovered device",
+                "manual_entry": "Enter MAC address manually",
+            },
         )
 
     async def async_step_pick_device(
@@ -114,9 +118,10 @@ class AintinksmartConfigFlow(ConfigFlow, domain=DOMAIN):
         """Handle manual entry chosen from menu."""
         # Show the same form as the user step when no devices are found
         return self.async_show_form(
-            step_id="user", # Submit back to user step handler
+            step_id="user",  # Submit back to user step handler
             data_schema=vol.Schema({vol.Required(CONF_MAC): str}),
-            description_placeholders={"message": "Please enter the MAC address."},
+            title="Set up Ain't Ink Smart Display",
+            description="Please enter the MAC address.",
         )
 
 
@@ -148,7 +153,10 @@ class AintinksmartConfigFlow(ConfigFlow, domain=DOMAIN):
              # Show the confirmation form
              return self.async_show_form(
                  step_id="bluetooth_confirm",
-                 description_placeholders=self.context.get("title_placeholders"),
+                 title="Confirm Discovered Device",
+                 description="Do you want to set up the Ain't Ink Smart display named '{name}'?".format(
+                     name=self.context.get("title_placeholders", {}).get("name", "")
+                 ),
              )
 
         # User confirmed
