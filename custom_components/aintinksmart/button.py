@@ -58,8 +58,6 @@ class ForceUpdateButton(AintinksmartEntity, ButtonEntity):
         source_state = self.hass.states.get(source_select_entity_id) if source_select_entity_id else None
         mode_state = self.hass.states.get(mode_select_entity_id) if mode_select_entity_id else None
 
-        _LOGGER.warning("DEBUG: Button checking source select entity_id: %s, state: %s", source_select_entity_id, source_state)
-        _LOGGER.warning("DEBUG: Button checking mode select entity_id: %s, state: %s", mode_select_entity_id, mode_state)
 
         if not source_state or not source_state.state or source_state.state in ("unknown", "unavailable"):
             _LOGGER.warning("No source entity selected for force update button")

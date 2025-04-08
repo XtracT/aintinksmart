@@ -45,7 +45,6 @@ SERVICE_SEND_IMAGE_SCHEMA = vol.Schema(
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Ain't Ink Smart from a config entry."""
     try:
-        _LOGGER.warning("DEBUG: Entered async_setup_entry for Ain't Ink Smart")
         hass.data.setdefault(DOMAIN, {})
         mac_address = entry.data[CONF_MAC]
 
@@ -149,7 +148,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if tasks:
                 await asyncio.gather(*tasks)
 
-        _LOGGER.warning("DEBUG: Exiting async_setup_entry for Ain't Ink Smart, returning True")
         return True
 
     except Exception as e:
