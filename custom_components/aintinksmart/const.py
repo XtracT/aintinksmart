@@ -23,8 +23,14 @@ STATE_IDLE: Final = "idle"
 STATE_CONNECTING: Final = "connecting"
 STATE_SENDING: Final = "sending_image"
 STATE_ERROR: Final = "error"
-STATE_SUCCESS: Final = "success" # Represents last send attempt success
-STATE_UNAVAILABLE: Final = "unavailable" # Standard HA state
+STATE_SUCCESS: Final = "success"  # Represents last send attempt success
+STATE_ERROR_CONNECTION: Final = "connection_error"
+STATE_ERROR_TIMEOUT: Final = "timeout_error"
+STATE_ERROR_SEND: Final = "send_error"
+STATE_ERROR_IMAGE_FETCH: Final = "image_fetch_error"
+STATE_ERROR_IMAGE_PROCESS: Final = "image_process_error"
+STATE_ERROR_UNKNOWN: Final = "unknown_error"
+STATE_UNAVAILABLE: Final = "unavailable"  # Standard HA state
 
 # Attributes
 ATTR_LAST_UPDATE: Final = "last_update"

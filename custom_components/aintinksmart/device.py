@@ -188,11 +188,15 @@ class AintinksmartDevice:
                     _LOGGER.info("[%s] Successfully fetched %d bytes from %s", self.mac_address, len(image_bytes), image_entity_id)
                 except (aiohttp_client.ClientError, asyncio.TimeoutError, vol.Invalid) as e:
                     _LOGGER.error("[%s] Failed to fetch or process image from entity %s: %s", self.mac_address, image_entity_id, e)
-                    self._update_state(STATE_ERROR, f"Failed to get image from entity: {e}")
+                    from .const import STATE_ERROR_IMAGE_FETCH
+                    from .const import STATE_ERROR_IMAGE_FETCH
+                    self._update_state(STATE_ERROR_IMAGE_FETCH, f"Failed to get image from entity: {e}")
                     return # Abort send
                 except Exception as e:
                     _LOGGER.exception("[%s] Unexpected error fetching image from entity %s", self.mac_address, image_entity_id)
-                    self._update_state(STATE_ERROR, f"Unexpected error getting image from entity: {e}")
+                    from .const import STATE_ERROR_UNKNOWN
+                    from .const import STATE_ERROR_UNKNOWN
+                    self._update_state(STATE_ERROR_UNKNOWN, f"Unexpected error getting image from entity: {e}")
                     return # Abort send
 
             elif image_data_b64:
@@ -201,11 +205,15 @@ class AintinksmartDevice:
                     image_bytes = base64.b64decode(image_data_b64)
                 except (TypeError, ValueError, binascii.Error) as e:
                     _LOGGER.error("[%s] Invalid base64 image data provided: %s", self.mac_address, e)
-                    self._update_state(STATE_ERROR, f"Invalid base64 data: {e}")
+                    from .const import STATE_ERROR_IMAGE_PROCESS
+                    from .const import STATE_ERROR_IMAGE_PROCESS
+                    self._update_state(STATE_ERROR_IMAGE_PROCESS, f"Invalid base64 data: {e}")
                     return # Abort send
             else:
                 _LOGGER.error("[%s] Service call missing image_data or image_entity_id", self.mac_address)
-                self._update_state(STATE_ERROR, "No image source provided")
+                from .const import STATE_ERROR_UNKNOWN
+                from .const import STATE_ERROR_UNKNOWN
+                self._update_state(STATE_ERROR_UNKNOWN, "No image source provided")
     async def _async_send_image_internal(self, image_bytes: bytes, mode: str) -> bool:
         """Process, format, build packets, and send image via BLE. Return True on success."""
         self._update_state(STATE_CONNECTING)
@@ -235,7 +243,9 @@ class AintinksmartDevice:
                 self._update_state(STATE_SUCCESS)
                 self._last_image_bytes = image_bytes  # Store for camera on success
             else:
-                self._update_state(STATE_ERROR, "Sending failed (unknown reason)")
+                from .const import STATE_ERROR_SEND
+                from .const import STATE_ERROR_SEND
+                self._update_state(STATE_ERROR_SEND, "Sending failed (unknown reason)")
 
         except (
             ImageProcessingError,
@@ -246,16 +256,39 @@ class AintinksmartDevice:
             asyncio.TimeoutError,
         ) as e:
             _LOGGER.error("[%s] Send operation failed: %s", self.mac_address, e)
-            self._update_state(STATE_ERROR, f"Send failed: {e}")
+            from .const import STATE_ERROR_SEND, STATE_ERROR_IMAGE_PROCESS, STATE_ERROR_CONNECTION, STATE_ERROR_TIMEOUT
+            if isinstance(e, (ImageProcessingError, ProtocolFormattingError, PacketBuilderError)):
+                error_state = STATE_ERROR_IMAGE_PROCESS
+            elif isinstance(e, BleCommunicationError):
+                error_state = STATE_ERROR_CONNECTION
+            elif isinstance(e, asyncio.TimeoutError):
+                error_state = STATE_ERROR_TIMEOUT
+            else: # BleakError
+                error_state = STATE_ERROR_SEND
+            from .const import STATE_ERROR_SEND, STATE_ERROR_IMAGE_PROCESS, STATE_ERROR_CONNECTION, STATE_ERROR_TIMEOUT
+            if isinstance(e, (ImageProcessingError, ProtocolFormattingError, PacketBuilderError)):
+                error_state = STATE_ERROR_IMAGE_PROCESS
+            elif isinstance(e, BleCommunicationError):
+                error_state = STATE_ERROR_CONNECTION
+            elif isinstance(e, asyncio.TimeoutError):
+                error_state = STATE_ERROR_TIMEOUT
+            else: # BleakError
+                error_state = STATE_ERROR_SEND
+            self._update_state(error_state, f"Send failed: {e}")
         except Exception as e:
             _LOGGER.exception("[%s] Unexpected error during send operation", self.mac_address)
-            self._update_state(STATE_ERROR, f"Unexpected error: {e}")
+            from .const import STATE_ERROR_UNKNOWN
+            from .const import STATE_ERROR_UNKNOWN
+            self._update_state(STATE_ERROR_UNKNOWN, f"Unexpected error: {e}")
         finally:
             if self._status in [STATE_CONNECTING, STATE_SENDING] and not success:
                 if not self._last_error:
-                    self._update_state(STATE_ERROR, "Send operation did not complete")
-                else:
-                    self._update_state(STATE_ERROR, self._last_error)
+                    # Keep the specific error state if already set
+                    if self._status not in [STATE_ERROR_CONNECTION, STATE_ERROR_TIMEOUT, STATE_ERROR_SEND, STATE_ERROR_IMAGE_PROCESS, STATE_ERROR_UNKNOWN]:
+                        from .const import STATE_ERROR_UNKNOWN
+                        self._update_state(STATE_ERROR_UNKNOWN, "Send operation did not complete")
+                    # else: # Keep existing error state and message
+                    #    self._update_state(self._status, self._last_error)
         return success
 
 
@@ -389,7 +422,9 @@ class AintinksmartDevice:
                 _LOGGER.info("[%s] Fetched %d bytes from source entity %s", self.mac_address, len(image_bytes), source_entity_id)
             except Exception as e:
                 _LOGGER.error("[%s] Failed to fetch image from source entity %s: %s", self.mac_address, source_entity_id, e)
-                self._update_state(STATE_ERROR, f"Fetch failed: {e}")
+                from .const import STATE_ERROR_IMAGE_FETCH
+                from .const import STATE_ERROR_IMAGE_FETCH
+                self._update_state(STATE_ERROR_IMAGE_FETCH, f"Fetch failed: {e}")
                 return
 
             # Compare with last uploaded image
