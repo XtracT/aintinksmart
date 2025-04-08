@@ -4,8 +4,23 @@ This document explains how to install, configure, and use the Ain't Ink Smart cu
 
 ## Installation
 
-1.  **Copy Files:** Copy the `custom_components/aintinksmart` directory into your Home Assistant `config/custom_components/` directory.
-2.  **Restart Home Assistant:** Restart your Home Assistant instance to load the new integration.
+### Method 1: HACS (Recommended)
+
+1.  **Ensure HACS is installed.**
+2.  **Add Custom Repository:**
+    *   Go to HACS > Integrations > Click the three dots in the top right > Custom Repositories.
+    *   Enter the URL of this GitHub repository (`<YOUR_REPOSITORY_URL>`).
+    *   Select "Integration" as the category.
+    *   Click "Add".
+3.  **Install Integration:**
+    *   Search for "Ain't Ink Smart E-Ink Display" in HACS > Integrations.
+    *   Click "Install".
+4.  **Restart Home Assistant:** Restart your Home Assistant instance.
+
+### Method 2: Manual Installation
+
+1.  **Copy Files:** Copy the `custom_components/aintinksmart` directory from this repository into your Home Assistant `config/custom_components/` directory.
+2.  **Restart Home Assistant:** Restart your Home Assistant instance.
 
 ## Configuration
 
