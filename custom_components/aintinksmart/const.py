@@ -14,9 +14,11 @@ PLATFORMS: Final = [
 
 # Configuration keys
 CONF_MAC: Final = "mac_address"
+NUMBER_KEY_PACKET_DELAY = "packet_delay"
 
 # Default values
 DEFAULT_NAME: Final = "Ain't Ink Smart Display"
+DEFAULT_PACKET_DELAY_MS = 20
 
 # Status States (can be expanded)
 STATE_IDLE: Final = "idle"

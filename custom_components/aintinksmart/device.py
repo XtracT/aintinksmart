@@ -21,7 +21,7 @@ from homeassistant.components.bluetooth import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.const import STATE_UNAVAILABLE as HA_STATE_UNAVAILABLE # Avoid confusion
-from homeassistant.helpers import aiohttp_client, device_registry as dr
+from homeassistant.helpers import aiohttp_client, device_registry as dr, entity_registry as er
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util # Import datetime utility
 
@@ -39,6 +39,8 @@ from .const import (
     ATTR_IMAGE_DATA,
     ATTR_IMAGE_ENTITY_ID,
     ATTR_MODE,
+    NUMBER_KEY_PACKET_DELAY, # Added
+    DEFAULT_PACKET_DELAY_MS, # Added
 )
 from .helpers import (
     ImageProcessor,
@@ -237,7 +239,46 @@ class AintinksmartDevice:
                 if self._ble_device is None:
                     raise BleCommunicationError("BLE device became unavailable before sending")
 
-                success = await async_send_packets_ble(self.hass, self._ble_device, packets)
+                # --- Get Packet Delay from Number Entity ---
+                ent_reg = er.async_get(self.hass)
+                number_unique_id = f"{self.entry.entry_id}_{NUMBER_KEY_PACKET_DELAY}"
+                delay_entity_id = ent_reg.async_get_entity_id("number", DOMAIN, number_unique_id)
+                delay_ms = DEFAULT_PACKET_DELAY_MS # Default value
+
+                if delay_entity_id:
+                    state = self.hass.states.get(delay_entity_id)
+                    if state and state.state not in (None, HA_STATE_UNAVAILABLE, "unknown"):
+                        try:
+                            delay_ms = int(float(state.state))
+                            if delay_ms < 1: # Ensure positive delay
+                                _LOGGER.warning(
+                                    "[%s] Packet delay %s state (%s ms) is invalid, using default %dms",
+                                    self.mac_address, delay_entity_id, state.state, DEFAULT_PACKET_DELAY_MS
+                                )
+                                delay_ms = DEFAULT_PACKET_DELAY_MS
+                            else:
+                                _LOGGER.debug("[%s] Using packet delay from %s: %d ms", self.mac_address, delay_entity_id, delay_ms)
+                        except (ValueError, TypeError):
+                            _LOGGER.warning(
+                                "[%s] Could not parse packet delay from %s state '%s', using default %dms",
+                                self.mac_address, delay_entity_id, state.state, DEFAULT_PACKET_DELAY_MS
+                            )
+                            delay_ms = DEFAULT_PACKET_DELAY_MS
+                    else:
+                        _LOGGER.warning(
+                            "[%s] Packet delay entity %s state is unavailable (%s), using default %dms",
+                            self.mac_address, delay_entity_id, state.state if state else "None", DEFAULT_PACKET_DELAY_MS
+                        )
+                        delay_ms = DEFAULT_PACKET_DELAY_MS
+                else:
+                    _LOGGER.warning(
+                        "[%s] Packet delay entity with unique ID %s not found, using default %dms",
+                        self.mac_address, number_unique_id, DEFAULT_PACKET_DELAY_MS
+                    )
+                    delay_ms = DEFAULT_PACKET_DELAY_MS
+                # --- End Get Packet Delay ---
+
+                success = await async_send_packets_ble(self.hass, self._ble_device, packets, delay_ms)
 
             if success:
                 self._update_state(STATE_SUCCESS)

@@ -18,8 +18,7 @@ from .const import IMG_CHAR_UUID
 
 _LOGGER = logging.getLogger(__name__)
 
-# TODO: Make delay configurable?
-PACKET_DELAY = 0.022  # Seconds delay between sending packets
+# Packet delay is now configurable via number entity
 
 class BleCommunicationError(Exception):
     """Custom exception for BLE communication errors."""
@@ -29,6 +28,7 @@ async def async_send_packets_ble(
     hass: HomeAssistant,
     ble_device: BLEDevice,
     packets: List[bytes],
+    packet_delay_ms: int, # Delay between packets in milliseconds
 ) -> bool:
     """
     Connects to the BLE device and sends the provided packets.
@@ -37,7 +37,7 @@ async def async_send_packets_ble(
         hass: HomeAssistant instance.
         ble_device: The target BLEDevice object.
         packets: A list of byte arrays, each representing a packet to send.
-
+        packet_delay_ms: Delay between sending packets in milliseconds.
     Returns:
         True if packets were sent successfully, False otherwise.
 
@@ -71,15 +71,18 @@ async def async_send_packets_ble(
 
                 _LOGGER.debug("Found characteristic: %s", img_char.uuid)
 
+                # Calculate delay in seconds
+                delay_sec = packet_delay_ms / 1000.0
+
                 # Send packets one by one with a delay
                 for i, packet in enumerate(packets):
                     try:
                         # response=False as we don't expect a response for writes here
                         await client.write_gatt_char(img_char, packet, response=False)
                         _LOGGER.debug("Sent packet %d/%d (%d bytes) to %s", i + 1, len(packets), len(packet), ble_device.address)
-                        # Add a small delay between packets if required by the device protocol
-                        if PACKET_DELAY > 0:
-                            await asyncio.sleep(PACKET_DELAY)
+                        # Add the configured delay between packets
+                        if delay_sec > 0:
+                            await asyncio.sleep(delay_sec)
                     except BleakError as e:
                         _LOGGER.error("BleakError sending packet %d to %s: %s", i + 1, ble_device.address, e)
                         raise BleCommunicationError(f"BLE write error: {e}") from e
