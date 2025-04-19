@@ -57,77 +57,54 @@ class AintinksmartConfigFlow(ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         """Initialize the config flow."""
         self._discovered_ble_devices: dict[str, BluetoothServiceInfoBleak] = {}
-        # self._discovered_mqtt_devices: dict[str, str] = {} # Removed MQTT discovery
-        # self._mqtt_unsubscribe: asyncio.TimerHandle | None = None # Removed MQTT discovery
+        self._discovered_mqtt_devices: dict[str, str] = {} # Added to store MQTT discovery results
         self._selected_mac: str | None = None
         self._config_data: dict[str, Any] = {}
+        self._mqtt_unsubscribe: callable | None = None # Added for MQTT scan result subscription
 
-    # Removed _async_mqtt_scan_callback as MQTT discovery is removed
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Start the config flow: discover devices and offer manual entry."""
-        _LOGGER.debug("Starting user step")
+        """Handle the initial step to choose discovery method or manual entry."""
+        _LOGGER.debug("Starting user step (initial choice)")
+        errors: dict[str, str] = {}
 
-        # --- Start Background Discovery ---
-        # 1. Bluetooth Discovery (HA handles this implicitly, we just read results later)
-
-
-        # MQTT Discovery removed due to complexity and potential errors
-
-        # --- Show Menu ---
-        # Offer choice immediately, discovery runs in background
-        return self.async_show_menu(
-            step_id="user",
-            menu_options=["pick_device", "manual_entry"],
-        )
-
-    async def async_step_pick_device(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        """Handle user choosing to pick a discovered device."""
         if user_input is not None:
-            # User has selected a device from the list
-            self._selected_mac = user_input[CONF_ADDRESS]
-            await self.async_set_unique_id(self._selected_mac, raise_on_progress=False)
-            self._abort_if_unique_id_configured()
-            return await self.async_step_configure_communication()
+            selection = user_input.get("selection")
 
-        _LOGGER.debug("Waiting %.1f seconds for discovery results...", DISCOVERY_TIMEOUT)
-        await asyncio.sleep(DISCOVERY_TIMEOUT)
+            if selection == "manual":
+                _LOGGER.debug("User selected manual entry")
+                return await self.async_step_manual_entry()
+            elif selection == "ble_discover":
+                _LOGGER.debug("User selected BLE discovery")
+                return await self.async_step_discover_devices(discovery_method="ble")
+            elif selection == "mqtt_discover":
+                _LOGGER.debug("User selected MQTT discovery")
+                return await self.async_step_mqtt_discovery_setup()
+            # Handle selection from discover_devices step if returning here
+            elif CONF_ADDRESS in user_input:
+                 self._selected_mac = user_input[CONF_ADDRESS]
+                 await self.async_set_unique_id(self._selected_mac, raise_on_progress=False)
+                 self._abort_if_unique_id_configured()
+                 return await self.async_step_configure_communication()
 
-        # MQTT listener cleanup removed
 
-        # Gather BLE results
-        current_addresses = self._async_current_ids()
-        for discovery_info in async_discovered_service_info(self.hass):
-            address = discovery_info.address
-            formatted_address = format_mac(address)
-            # TODO: Add better filtering based on service UUIDs or advertisement data if known
-            if formatted_address not in current_addresses and formatted_address not in self._discovered_ble_devices:
-                 # Basic name filter for now
-                 if discovery_info.name and discovery_info.name.lower().startswith("easytag"):
-                     _LOGGER.debug("Discovered device via BLE: %s (%s)", discovery_info.name, formatted_address)
-                     self._discovered_ble_devices[formatted_address] = discovery_info
-
-        # Use only BLE results
-        discovered_devices: dict[str, str] = {
-            mac: info.name or f"{DEFAULT_NAME} {mac}"
-            for mac, info in self._discovered_ble_devices.items()
-        }
-
-        if not discovered_devices:
-            _LOGGER.warning("No devices discovered via Bluetooth scan")
-            return self.async_abort(reason="no_devices_found")
-            # Alternative: Show form with error message
-            # return self.async_show_form(step_id="pick_device", errors={"base": "no_devices_found"})
+        # Initial form to choose discovery method or manual entry
+        schema = vol.Schema({
+            vol.Required("selection"): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=["ble_discover", "mqtt_discover", "manual"],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                    translation_key="user_selection_options",
+                )
+            )
+        })
 
         return self.async_show_form(
-            step_id="pick_device",
-            data_schema=vol.Schema(
-                {vol.Required(CONF_ADDRESS): vol.In(discovered_devices)}
-            ),
-            description_placeholders={"count": len(discovered_devices)},
+            step_id="user",
+            data_schema=schema,
+            description_placeholders={"discovery_timeout": DISCOVERY_TIMEOUT},
+            errors=errors,
         )
 
 
@@ -135,6 +112,7 @@ class AintinksmartConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Handle user choosing to enter MAC address manually."""
+        _LOGGER.debug("Starting manual entry step")
         errors: dict[str, str] = {}
         if user_input is not None:
             mac = user_input[CONF_MAC]
@@ -153,12 +131,237 @@ class AintinksmartConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    async def async_step_mqtt_discovery_setup(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Ask for MQTT base topic for discovery."""
+        _LOGGER.debug("Starting MQTT discovery setup step")
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            mqtt_base_topic = user_input[CONF_MQTT_BASE_TOPIC]
+            # Store the base topic temporarily for the scan step
+            self._config_data[CONF_MQTT_BASE_TOPIC] = mqtt_base_topic
+            _LOGGER.debug("MQTT discovery base topic set to: %s", mqtt_base_topic)
+            return await self.async_step_mqtt_discovery_scan()
+
+        # Show form to enter MQTT base topic
+        schema = vol.Schema({
+            vol.Required(
+                CONF_MQTT_BASE_TOPIC,
+                description={"suggested_value": DEFAULT_MQTT_BASE_TOPIC},
+                default=DEFAULT_MQTT_BASE_TOPIC,
+            ): str
+        })
+
+        return self.async_show_form(
+            step_id="mqtt_discovery_setup",
+            data_schema=schema,
+            errors=errors,
+        )
+
+    async def async_step_mqtt_discovery_scan(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Initiate MQTT scan and wait for results."""
+        _LOGGER.debug("Starting MQTT discovery scan step")
+        errors: dict[str, str] = {}
+        mqtt_base_topic = self._config_data.get(CONF_MQTT_BASE_TOPIC)
+
+        if not mqtt_base_topic:
+             _LOGGER.error("MQTT base topic not set for discovery scan.")
+             return self.async_abort(reason="mqtt_topic_required") # Should not happen if flow is correct
+
+        scan_command_topic = f"{mqtt_base_topic}/bridge/command/scan"
+        scan_result_topic = f"{mqtt_base_topic}/bridge/scan_result"
+        # Clear previous MQTT discovery results
+        self._discovered_mqtt_devices = {}
+        self._scan_future = asyncio.Future() # Create a future to signal completion
+
+        @callback
+        def mqtt_scan_result_callback(msg: mqtt.models.MQTTMessage) -> None:
+            """Handle incoming MQTT scan results."""
+            _LOGGER.debug("Received MQTT scan result on topic %s", msg.topic)
+            try:
+                payload = json.loads(msg.payload)
+                payload = json.loads(msg.payload)
+                if isinstance(payload, list):
+                    _LOGGER.debug("Received list of devices in MQTT scan result")
+                    for device_info in payload:
+                        if isinstance(device_info, dict) and "mac" in device_info:
+                            mac = format_mac(device_info["mac"])
+                            name = device_info.get("name", f"{DEFAULT_NAME} {mac}")
+                            # Add all discovered devices, check for already configured later
+                            self._discovered_mqtt_devices[mac] = name
+                            _LOGGER.debug("Discovered device via MQTT: %s (%s)", name, mac)
+                    # If we received a list and found devices, consider scan complete
+                    if self._discovered_mqtt_devices and not self._scan_future.done():
+                         self._scan_future.set_result(True)
+
+                elif isinstance(payload, dict) and "address" in payload:
+                     # Handle single device object
+                     _LOGGER.debug("Received single device in MQTT scan result")
+                     mac = format_mac(payload["address"])
+                     name = payload.get("name", f"{DEFAULT_NAME} {mac}")
+                     # Add the discovered device, check for already configured later
+                     self._discovered_mqtt_devices[mac] = name
+                     _LOGGER.debug("Discovered device via MQTT: %s (%s)", name, mac)
+                     # If we received a single device, consider scan complete
+                     if not self._scan_future.done():
+                          self._scan_future.set_result(True)
+
+                else:
+                    _LOGGER.warning("Received unexpected payload format on MQTT scan result topic: %s", msg.payload)
+
+            except json.JSONDecodeError:
+                _LOGGER.warning("Received invalid JSON on MQTT scan result topic: %s", msg.payload)
+            except Exception as e:
+                _LOGGER.exception("Error processing MQTT scan result:")
+
+
+        # Subscribe to scan results topic
+        _LOGGER.debug("Subscribing to MQTT scan result topic: %s", scan_result_topic)
+        try:
+            self._mqtt_unsubscribe = await mqtt.async_subscribe(
+                self.hass, scan_result_topic, mqtt_scan_result_callback, qos=1
+            )
+            # No need for async_on_step_done with write_to_file approach, handle unsubscribe manually if needed
+        except HomeAssistantError as e:
+            _LOGGER.error("Failed to subscribe to MQTT scan result topic %s: %s", scan_result_topic, e)
+            return self.async_show_form(
+                step_id="mqtt_discovery_scan",
+                errors={"base": "mqtt_subscription_failed"},
+                description_placeholders={"topic": scan_result_topic},
+            )
+
+
+        # Publish scan command
+        _LOGGER.info("Publishing MQTT scan command to topic: %s", scan_command_topic)
+        try:
+            await mqtt.async_publish(self.hass, scan_command_topic, "", qos=1, retain=False)
+        except HomeAssistantError as e:
+            _LOGGER.error("Failed to publish MQTT scan command to topic %s: %s", scan_command_topic, e)
+            # Unsubscribe if publish failed
+            if self._mqtt_unsubscribe:
+                 self._mqtt_unsubscribe()
+                 self._mqtt_unsubscribe = None
+            return self.async_show_form(
+                step_id="mqtt_discovery_scan",
+                errors={"base": "mqtt_publish_failed"},
+                description_placeholders={"topic": scan_command_topic},
+            )
+
+        # Wait for discovery results or timeout
+        _LOGGER.debug("Waiting %.1f seconds for MQTT discovery results or timeout...", DISCOVERY_TIMEOUT)
+        try:
+            await asyncio.wait_for(self._scan_future, timeout=DISCOVERY_TIMEOUT)
+        except asyncio.TimeoutError:
+            _LOGGER.warning("Timed out waiting for MQTT discovery results.")
+        except asyncio.CancelledError:
+             _LOGGER.debug("MQTT discovery scan step cancelled.")
+             # Clean up subscription if cancelled
+             if self._mqtt_unsubscribe:
+                  self._mqtt_unsubscribe()
+                  self._mqtt_unsubscribe = None
+             raise # Re-raise the cancellation exception
+
+
+        # After waiting (either by result or timeout), unsubscribe and proceed to show discovered devices
+        if self._mqtt_unsubscribe:
+             self._mqtt_unsubscribe()
+             self._mqtt_unsubscribe = None
+
+        if self._discovered_mqtt_devices:
+             return await self.async_step_discover_devices(discovery_method="mqtt")
+        else:
+             _LOGGER.warning("No devices discovered via MQTT scan")
+             # Show the MQTT discovery setup form again with an error
+             return self.async_show_form(
+                 step_id="mqtt_discovery_setup", # Return to setup step to allow changing topic or trying again
+                 errors={"base": "no_devices_found"},
+                 data_schema=vol.Schema({
+                     vol.Required(
+                         CONF_MQTT_BASE_TOPIC,
+                         description={"suggested_value": mqtt_base_topic},
+                         default=mqtt_base_topic,
+                     ): str
+                 }),
+                 description_placeholders={"discovery_timeout": DISCOVERY_TIMEOUT},
+             )
+
+
+    async def async_step_discover_devices(
+        self, user_input: dict[str, Any] | None = None, discovery_method: str | None = None
+    ) -> ConfigFlowResult:
+        """Show discovered devices and allow selection."""
+        _LOGGER.debug("Starting discover devices step (method: %s)", discovery_method)
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            # User has selected a device from the list
+            self._selected_mac = user_input[CONF_ADDRESS]
+            await self.async_set_unique_id(self._selected_mac, raise_on_progress=False)
+            self._abort_if_unique_id_configured()
+            return await self.async_step_configure_communication()
+
+        discovered_devices: dict[str, str] = {}
+        description_placeholders: dict[str, Any] = {}
+
+        if discovery_method == "ble":
+             # Gather BLE results (already done in async_step_user before refactor, now do here)
+             _LOGGER.debug("Gathering BLE discovery results...")
+             current_addresses = self._async_current_ids()
+             for discovery_info in async_discovered_service_info(self.hass):
+                 address = discovery_info.address
+                 formatted_address = format_mac(address)
+                 # TODO: Add better filtering based on service UUIDs or advertisement data if known
+                 if formatted_address not in current_addresses and formatted_address not in self._discovered_ble_devices:
+                      # Basic name filter for now
+                      if discovery_info.name and discovery_info.name.lower().startswith("easytag"):
+                          _LOGGER.debug("Discovered device via BLE: %s (%s)", discovery_info.name, formatted_address)
+                          self._discovered_ble_devices[formatted_address] = discovery_info
+
+             discovered_devices = {
+                 mac: info.name or f"{DEFAULT_NAME} {mac}"
+                 for mac, info in self._discovered_ble_devices.items()
+             }
+             description_placeholders["method"] = "Bluetooth" # Need string for this
+        elif discovery_method == "mqtt":
+             # Use previously stored MQTT discovered devices
+             _LOGGER.debug("Using MQTT discovery results...")
+             discovered_devices = getattr(self, "_discovered_mqtt_devices", {})
+             description_placeholders["method"] = "MQTT Gateway" # Need string for this
+        else:
+             _LOGGER.error("Unknown discovery method in async_step_discover_devices: %s", discovery_method)
+             return self.async_abort(reason="unknown_discovery_method")
+
+
+        if not discovered_devices:
+            _LOGGER.warning("No devices found during %s discovery.", discovery_method)
+            # Return to the initial step with an error
+            errors["base"] = "no_devices_found"
+            # Need to return to the user step, but pass the error.
+            # This is complex with separate steps. Let's simplify and abort with a specific reason.
+            return self.async_abort(reason="no_devices_found")
+
+
+        # Show form to pick a discovered device
+        description_placeholders["count"] = len(discovered_devices)
+        return self.async_show_form(
+            step_id="user", # Return to user step to handle selection
+            data_schema=vol.Schema(
+                {vol.Required(CONF_ADDRESS): vol.In(discovered_devices)}
+            ),
+            description_placeholders=description_placeholders,
+            errors=errors,
+        )
 
 
     async def async_step_configure_communication(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Ask user for communication mode and MQTT topic if needed."""
+        _LOGGER.debug("Starting configure communication step for %s", self._selected_mac)
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -205,7 +408,6 @@ class AintinksmartConfigFlow(ConfigFlow, domain=DOMAIN):
             description_placeholders={"mac_address": self._selected_mac},
         )
 
-    # Remove async_step_bluetooth and async_step_bluetooth_confirm as discovery is handled differently
 
     def _async_create_entry(self, title: str, data: dict[str, Any]) -> ConfigFlowResult:
         """Create the config entry with combined data."""

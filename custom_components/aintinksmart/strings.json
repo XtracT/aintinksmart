@@ -9,12 +9,13 @@
           "manual_entry": "Enter device details manually"
         },
         "data": {
+          "selection": "Choose an option",
           "mac_address": "MAC Address"
         }
       },
-      "pick_device": {
+      "discover_devices": {
         "title": "Select Discovered Device",
-        "description": "Found {count} device(s) via Bluetooth and/or MQTT scan.",
+        "description": "Found {count} device(s) via {method} scan.",
         "data": {
           "address": "Device"
         }
@@ -24,6 +25,18 @@
         "data": {
           "mac_address": "MAC Address (e.g., AA:BB:CC:DD:EE:FF or AA-BB-CC-DD-EE-FF)"
         }
+      },
+      "mqtt_discovery_setup": {
+        "title": "MQTT Gateway Discovery Setup",
+        "description": "Enter the base MQTT topic for your gateway.",
+        "data": {
+          "mqtt_base_topic": "MQTT Gateway Base Topic"
+        }
+      },
+      "mqtt_discovery_scan": {
+        "title": "Scanning via MQTT Gateway",
+        "description": "Initiating scan via MQTT gateway. Please wait for results...",
+        "data": {}
       },
       "configure_communication": {
         "title": "Configure Communication",
@@ -39,13 +52,14 @@
       "cannot_connect": "Unable to connect to the device. Ensure it's powered on and in range.",
       "unknown": "An unknown error occurred.",
       "discovery_error": "An error occurred during device discovery.",
-      "mqtt_topic_required": "MQTT Base Topic is required when Communication Mode is set to MQTT Gateway."
+      "mqtt_topic_required": "MQTT Base Topic is required when Communication Mode is set to MQTT Gateway.",
+      "no_devices_found": "No compatible devices found via Bluetooth or MQTT scan. Try manual entry or check device power/range and MQTT gateway status (if applicable).",
+      "mqtt_subscription_failed": "Failed to subscribe to MQTT topic: {topic}. Check MQTT configuration and broker connection.",
+      "mqtt_publish_failed": "Failed to publish MQTT message to topic: {topic}. Check MQTT configuration and broker connection."
     },
     "abort": {
       "already_configured": "Device is already configured.",
-      "not_supported": "Device not supported by this integration (check name/advertisement).",
-      "discovery_error": "An error occurred during device discovery.",
-      "no_devices_found": "No compatible devices found via Bluetooth or MQTT scan. Try manual entry or check device power/range and MQTT gateway status (if applicable)."
+      "not_supported": "Device not supported by this integration (check name/advertisement)."
     }
   },
   "selector": {
@@ -54,6 +68,13 @@
           "ble": "Direct BLE",
           "mqtt": "MQTT Gateway"
         }
+      },
+      "user_selection_options": {
+        "options": {
+          "ble_discover": "Scan using HA BLE",
+          "mqtt_discover": "Scan using MQTT gateway",
+          "manual": "Add MAC manually"
+        }
       }
-  }
+    }
 }
