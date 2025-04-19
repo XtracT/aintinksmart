@@ -30,6 +30,7 @@ from .const import (
     ATTR_LAST_UPDATE,
     ATTR_LAST_ERROR,
     COMM_MODE_MQTT, # Added
+    SENSOR_KEY_MQTT_DISPLAY_TRANSFER_STATUS, # Added
 )
 from .entity import AintinksmartEntity
 # Import device manager type hint safely
@@ -55,6 +56,12 @@ SENSOR_MQTT_BRIDGE_STATUS_DESCRIPTION = SensorEntityDescription( # Added
     # options=["online", "offline", "connecting"], # Added - example options
 )
 
+SENSOR_MQTT_DISPLAY_TRANSFER_STATUS_DESCRIPTION = SensorEntityDescription( # Added
+    key=SENSOR_KEY_MQTT_DISPLAY_TRANSFER_STATUS, # Added
+    name="Gateway Transfer Status", # Added
+    icon="mdi:swap-horizontal-bold", # Added - Example icon
+) # Added
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -75,6 +82,8 @@ async def async_setup_entry(
     if device_manager._comm_mode == COMM_MODE_MQTT: # Accessing protected member for simplicity in example
          _LOGGER.debug("[%s] Adding MQTT Gateway Status sensor", device_manager.mac_address)
          sensors.append(AintinksmartMqttGatewayStatusSensor(device_manager)) # Added
+         _LOGGER.debug("[%s] Adding MQTT Gateway Transfer Status sensor", device_manager.mac_address) # Added log
+         sensors.append(AintinksmartMqttDisplayTransferStatusSensor(device_manager)) # Added
 
     async_add_entities(sensors)
 
@@ -151,3 +160,26 @@ class AintinksmartMqttGatewayStatusSensor(AintinksmartEntity, SensorEntity): # A
         # The sensor is available if the bridge status is not the initial unavailable state
         return self.native_value != STATE_UNAVAILABLE # Added
 
+
+class AintinksmartMqttDisplayTransferStatusSensor(AintinksmartEntity, SensorEntity): # Added
+    """Representation of the MQTT Gateway Display Transfer Status Sensor.""" # Added
+
+    entity_description = SENSOR_MQTT_DISPLAY_TRANSFER_STATUS_DESCRIPTION # Added
+
+    def __init__(self, device_manager: AintinksmartDevice) -> None: # Added
+        """Initialize the sensor.""" # Added
+        super().__init__(device_manager) # Added
+
+    @property # Added
+    def native_value(self) -> StateType: # Added
+        """Return the state of the sensor.""" # Added
+        # Get state directly from the device manager's state data property # Added
+        value = self._manager.state_data.get(SENSOR_KEY_MQTT_DISPLAY_TRANSFER_STATUS, STATE_UNAVAILABLE) # Added
+        _LOGGER.debug("[%s] Sensor '%s' retrieving native_value: '%s'", self._manager.mac_address, self.entity_description.key, value) # Added debug log
+        return value # Added
+
+    @property # Added
+    def available(self) -> bool: # Added
+        """Return True if the sensor is available.""" # Added
+        # Available if the manager is available and the status is not the initial unavailable state # Added
+        return self._manager.is_available and self.native_value != STATE_UNAVAILABLE # Added

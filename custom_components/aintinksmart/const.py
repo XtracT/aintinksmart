@@ -49,6 +49,9 @@ ATTR_LAST_ERROR: Final = "last_error"
 # MQTT Topics
 MQTT_BRIDGE_STATUS_TOPIC_SUFFIX: Final = "bridge/status"
 
+# Sensor Keys (used in state_data and entity descriptions)
+SENSOR_KEY_MQTT_DISPLAY_TRANSFER_STATUS: Final = "mqtt_display_transfer_status"
+
 # Service Details
 SERVICE_SEND_IMAGE: Final = "send_image"
 ATTR_IMAGE_DATA: Final = "image_data"

@@ -58,6 +58,7 @@ from .const import (
     NUMBER_KEY_PACKET_DELAY,
     DEFAULT_PACKET_DELAY_MS,
     MQTT_BRIDGE_STATUS_TOPIC_SUFFIX, # Added
+    SENSOR_KEY_MQTT_DISPLAY_TRANSFER_STATUS, # Added import
 )
 from .helpers import (
     ImageProcessor,
@@ -99,6 +100,7 @@ class AintinksmartDevice:
         # State tracking
         self._status: str = STATE_IDLE
         self._mqtt_bridge_status: str = HA_STATE_UNAVAILABLE # Added for gateway bridge status
+        self._mqtt_display_transfer_status: str = HA_STATE_UNAVAILABLE # Added for display transfer status
         self._last_error: str | None = None
         self._last_update: datetime | None = None
         self._last_image_bytes: bytes | None = None # Last successfully sent image
@@ -138,6 +140,7 @@ class AintinksmartDevice:
             "last_image_bytes": self._last_image_bytes, # For camera
             "is_available": is_available_status, # Use the evaluated value
             "mqtt_bridge_status": self._mqtt_bridge_status, # Added
+            SENSOR_KEY_MQTT_DISPLAY_TRANSFER_STATUS: self._mqtt_display_transfer_status, # Added
         }
 
     async def async_init(self) -> None:
@@ -168,6 +171,7 @@ class AintinksmartDevice:
         if self._comm_mode == COMM_MODE_BLE:
             # Reset MQTT bridge status when switching away from MQTT
             self._mqtt_bridge_status = HA_STATE_UNAVAILABLE
+            self._mqtt_display_transfer_status = HA_STATE_UNAVAILABLE # Added reset
             self._notify_listeners() # Notify entities about the status change
 
             if async_scanner_count(self.hass, connectable=True) < 1:
@@ -196,7 +200,7 @@ class AintinksmartDevice:
                 self._update_state(HA_STATE_UNAVAILABLE, "MQTT not connected")
                 # We still subscribe, it will work once MQTT connects
 
-            mac_no_colons = self.mac_address.replace(":", "").lower()
+            mac_no_colons = self.mac_address.replace(":", "").upper() # Changed to upper case
             status_topic = f"{self._mqtt_base_topic}/display/{mac_no_colons}/status"
             bridge_status_topic = f"{self._mqtt_base_topic}/{MQTT_BRIDGE_STATUS_TOPIC_SUFFIX}" # Define the variable
 
@@ -278,8 +282,12 @@ class AintinksmartDevice:
         if self._comm_mode != COMM_MODE_MQTT:
             return # Should not happen if unsubscribed correctly
 
-        payload = msg.payload.decode("utf-8").lower() # Assuming simple string status
+        payload = msg.payload.lower() # Payload is already string, just lower() for main status logic
         _LOGGER.info("[%s] Received MQTT status update: '%s'", self.mac_address, payload)
+
+        # Store the payload as the transfer status (preserving case)
+        self._mqtt_display_transfer_status = msg.payload # Payload is already string
+        _LOGGER.debug("[%s] Stored display transfer status: '%s'", self.mac_address, self._mqtt_display_transfer_status) # Added debug log
 
         # Cancel pending timeout task if we receive any status
         if self._mqtt_status_timeout_task:
