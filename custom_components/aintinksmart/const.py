@@ -46,6 +46,9 @@ COMM_MODE_MQTT: Final = "mqtt"
 ATTR_LAST_UPDATE: Final = "last_update"
 ATTR_LAST_ERROR: Final = "last_error"
 
+# MQTT Topics
+MQTT_BRIDGE_STATUS_TOPIC_SUFFIX: Final = "bridge/status"
+
 # Service Details
 SERVICE_SEND_IMAGE: Final = "send_image"
 ATTR_IMAGE_DATA: Final = "image_data"

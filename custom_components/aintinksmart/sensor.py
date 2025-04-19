@@ -29,6 +29,7 @@ from .const import (
     # STATE_UNAVAILABLE is imported from const
     ATTR_LAST_UPDATE,
     ATTR_LAST_ERROR,
+    COMM_MODE_MQTT, # Added
 )
 from .entity import AintinksmartEntity
 # Import device manager type hint safely
@@ -38,12 +39,20 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-# Define the sensor description
-SENSOR_DESCRIPTION = SensorEntityDescription(
+# Define sensor descriptions
+SENSOR_STATUS_DESCRIPTION = SensorEntityDescription(
     key="status", # Used for unique_id in base class
     name="Status", # Used if _attr_has_entity_name=False
     # device_class=SensorDeviceClass.ENUM, # Consider if states fit an existing class
     # options=[STATE_IDLE, STATE_CONNECTING, STATE_SENDING, STATE_SUCCESS, STATE_ERROR, STATE_UNAVAILABLE], # If using ENUM
+)
+
+SENSOR_MQTT_BRIDGE_STATUS_DESCRIPTION = SensorEntityDescription( # Added
+    key="mqtt_bridge_status", # Added
+    name="MQTT Gateway Status", # Added
+    icon="mdi:mqtt", # Added
+    # device_class=SensorDeviceClass.ENUM, # Added - depends on possible values
+    # options=["online", "offline", "connecting"], # Added - example options
 )
 
 
@@ -61,13 +70,19 @@ async def async_setup_entry(
     sensors = [
         AintinksmartStatusSensor(device_manager), # Pass the manager instance
     ]
+
+    # Add MQTT Gateway Status sensor only if communication mode is MQTT
+    if device_manager._comm_mode == COMM_MODE_MQTT: # Accessing protected member for simplicity in example
+         _LOGGER.debug("[%s] Adding MQTT Gateway Status sensor", device_manager.mac_address)
+         sensors.append(AintinksmartMqttGatewayStatusSensor(device_manager)) # Added
+
     async_add_entities(sensors)
 
 
 class AintinksmartStatusSensor(AintinksmartEntity, SensorEntity):
     """Representation of an Ain't Ink Smart Status Sensor."""
 
-    entity_description = SENSOR_DESCRIPTION # Assign description
+    entity_description = SENSOR_STATUS_DESCRIPTION # Assign description
 
     def __init__(self, device_manager: AintinksmartDevice) -> None:
         """Initialize the sensor."""
@@ -113,3 +128,26 @@ class AintinksmartStatusSensor(AintinksmartEntity, SensorEntity):
 
     # No need for _handle_coordinator_update here anymore,
     # the base class handles async_write_ha_state via the listener pattern
+
+
+class AintinksmartMqttGatewayStatusSensor(AintinksmartEntity, SensorEntity): # Added
+    """Representation of the MQTT Gateway Status Sensor.""" # Added
+
+    entity_description = SENSOR_MQTT_BRIDGE_STATUS_DESCRIPTION # Added
+
+    def __init__(self, device_manager: AintinksmartDevice) -> None: # Added
+        """Initialize the sensor.""" # Added
+        super().__init__(device_manager) # Added
+
+    @property # Added
+    def native_value(self) -> StateType: # Added
+        """Return the state of the sensor.""" # Added
+        # Get state directly from the device manager's state data property
+        return self._manager.state_data.get("mqtt_bridge_status", STATE_UNAVAILABLE) # Added
+
+    @property # Added
+    def available(self) -> bool: # Added
+        """Return True if the sensor is available.""" # Added
+        # The sensor is available if the bridge status is not the initial unavailable state
+        return self.native_value != STATE_UNAVAILABLE # Added
+

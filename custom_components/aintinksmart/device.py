@@ -57,6 +57,7 @@ from .const import (
     ATTR_MODE,
     NUMBER_KEY_PACKET_DELAY,
     DEFAULT_PACKET_DELAY_MS,
+    MQTT_BRIDGE_STATUS_TOPIC_SUFFIX, # Added
 )
 from .helpers import (
     ImageProcessor,
@@ -92,10 +93,12 @@ class AintinksmartDevice:
         self._ble_device: BLEDevice | None = None
         self._cancel_bluetooth_callback: callable | None = None
         self._cancel_mqtt_subscription: callable | None = None
+        self._cancel_mqtt_bridge_status_subscription: callable | None = None # Added for bridge status
         self._mqtt_status_timeout_task: asyncio.TimerHandle | None = None
 
         # State tracking
         self._status: str = STATE_IDLE
+        self._mqtt_bridge_status: str = HA_STATE_UNAVAILABLE # Added for gateway bridge status
         self._last_error: str | None = None
         self._last_update: datetime | None = None
         self._last_image_bytes: bytes | None = None # Last successfully sent image
@@ -134,6 +137,7 @@ class AintinksmartDevice:
             ATTR_LAST_UPDATE: self._last_update,
             "last_image_bytes": self._last_image_bytes, # For camera
             "is_available": is_available_status, # Use the evaluated value
+            "mqtt_bridge_status": self._mqtt_bridge_status, # Added
         }
 
     async def async_init(self) -> None:
@@ -162,6 +166,10 @@ class AintinksmartDevice:
         await self.async_cleanup_communication_mode() # Clean up previous mode's listeners
 
         if self._comm_mode == COMM_MODE_BLE:
+            # Reset MQTT bridge status when switching away from MQTT
+            self._mqtt_bridge_status = HA_STATE_UNAVAILABLE
+            self._notify_listeners() # Notify entities about the status change
+
             if async_scanner_count(self.hass, connectable=True) < 1:
                 _LOGGER.warning("[%s] Bluetooth scanner is not available or enabled", self.mac_address)
                 self._update_state(HA_STATE_UNAVAILABLE, "Bluetooth not available")
@@ -190,15 +198,22 @@ class AintinksmartDevice:
 
             mac_no_colons = self.mac_address.replace(":", "").lower()
             status_topic = f"{self._mqtt_base_topic}/display/{mac_no_colons}/status"
+            bridge_status_topic = f"{self._mqtt_base_topic}/{MQTT_BRIDGE_STATUS_TOPIC_SUFFIX}" # Define the variable
 
             _LOGGER.info("[%s] Subscribing to MQTT status topic: %s", self.mac_address, status_topic)
+            _LOGGER.info("[%s] Subscribing to MQTT bridge status topic: %s", self.mac_address, bridge_status_topic) # Added
             try:
                 self._cancel_mqtt_subscription = await mqtt.async_subscribe(
                     self.hass, status_topic, self._handle_mqtt_status_update, qos=1
                 )
+                self._cancel_mqtt_bridge_status_subscription = await mqtt.async_subscribe( # Added
+                    self.hass, bridge_status_topic, self._handle_mqtt_bridge_status_update, qos=1 # Added
+                )
             except HomeAssistantError as e:
-                _LOGGER.error("[%s] Failed to subscribe to MQTT topic %s: %s", self.mac_address, status_topic, e)
+                _LOGGER.error("[%s] Failed to subscribe to MQTT topics: %s", self.mac_address, e) # Modified log
                 self._update_state(STATE_ERROR, f"MQTT subscription failed: {e}")
+                # Attempt to clean up any partial subscriptions
+                await self.async_cleanup_communication_mode()
                 return
 
             # Set initial state based on MQTT connection status
@@ -215,13 +230,20 @@ class AintinksmartDevice:
             _LOGGER.debug("[%s] Cancelling Bluetooth callback", self.mac_address)
             self._cancel_bluetooth_callback()
             self._cancel_bluetooth_callback = None
-        if self._cancel_mqtt_subscription:
-            _LOGGER.debug("[%s] Unsubscribing from MQTT topics", self.mac_address)
+        if self._cancel_mqtt_subscription is not None:
+            _LOGGER.debug("[%s] Unsubscribing from MQTT display status topic", self.mac_address) # Modified log
             try:
                 await self._cancel_mqtt_subscription()
             except HomeAssistantError as e:
-                 _LOGGER.warning("[%s] Error unsubscribing from MQTT: %s", self.mac_address, e)
+                 _LOGGER.warning("[%s] Error unsubscribing from MQTT display status: %s", self.mac_address, e) # Modified log
             self._cancel_mqtt_subscription = None
+        if self._cancel_mqtt_bridge_status_subscription is not None: # Added
+            _LOGGER.debug("[%s] Unsubscribing from MQTT bridge status topic", self.mac_address) # Added
+            try: # Added
+                await self._cancel_mqtt_bridge_status_subscription() # Added
+            except HomeAssistantError as e: # Added
+                 _LOGGER.warning("[%s] Error unsubscribing from MQTT bridge status: %s", self.mac_address, e) # Added
+            self._cancel_mqtt_bridge_status_subscription = None # Added
         if self._mqtt_status_timeout_task:
             self._mqtt_status_timeout_task.cancel()
             self._mqtt_status_timeout_task = None
@@ -300,6 +322,21 @@ class AintinksmartDevice:
                  return # Ignore if not sending and status is weird
 
         self._update_state(new_state, error_msg)
+
+    @callback
+    def _handle_mqtt_bridge_status_update(self, msg: mqtt.models.MQTTMessage) -> None: # Added
+        """Handle status messages received from the MQTT gateway bridge topic.""" # Added
+        if self._comm_mode != COMM_MODE_MQTT: # Added
+            return # Should not happen if unsubscribed correctly # Added
+
+        payload = msg.payload # Assuming simple string status, no lower() needed yet # Added
+        _LOGGER.debug("[%s] Received MQTT bridge status update: '%s'", self.mac_address, payload) # Added
+
+        # Update the internal bridge status
+        self._mqtt_bridge_status = payload # Added
+
+        # Notify listeners about the state change (including the new bridge status)
+        self._notify_listeners() # Added
 
     @callback
     def _handle_mqtt_status_timeout(self) -> None:
