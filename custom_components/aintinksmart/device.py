@@ -447,43 +447,46 @@ class AintinksmartDevice:
                 # 4. Send via configured mode
                 self._update_state(STATE_SENDING)
 
-                # --- Get Packet Delay from Number Entity ---
-                ent_reg = er.async_get(self.hass)
-                number_unique_id = f"{self.entry.entry_id}_{NUMBER_KEY_PACKET_DELAY}"
-                delay_entity_id = ent_reg.async_get_entity_id("number", DOMAIN, number_unique_id)
-                delay_ms = DEFAULT_PACKET_DELAY_MS # Default value
+                # --- Get Packet Delay (only for BLE) ---
+                delay_ms = DEFAULT_PACKET_DELAY_MS # Initialize with default
 
-                if delay_entity_id:
-                    state = self.hass.states.get(delay_entity_id)
-                    if state and state.state not in (None, HA_STATE_UNAVAILABLE, "unknown"):
-                        try:
-                            delay_ms = int(float(state.state))
-                            if delay_ms < 1: # Ensure positive delay
+                if self._comm_mode == COMM_MODE_BLE:
+                    ent_reg = er.async_get(self.hass)
+                    number_unique_id = f"{self.entry.entry_id}_{NUMBER_KEY_PACKET_DELAY}"
+                    delay_entity_id = ent_reg.async_get_entity_id("number", DOMAIN, number_unique_id)
+
+                    if delay_entity_id:
+                        state = self.hass.states.get(delay_entity_id)
+                        if state and state.state not in (None, HA_STATE_UNAVAILABLE, "unknown"):
+                            try:
+                                delay_ms = int(float(state.state))
+                                if delay_ms < 1: # Ensure positive delay
+                                    _LOGGER.warning(
+                                        "[%s] Packet delay %s state (%s ms) is invalid, using default %dms",
+                                        self.mac_address, delay_entity_id, state.state, DEFAULT_PACKET_DELAY_MS
+                                    )
+                                    delay_ms = DEFAULT_PACKET_DELAY_MS
+                                else:
+                                    _LOGGER.debug("[%s] Using packet delay from %s: %d ms", self.mac_address, delay_entity_id, delay_ms)
+                            except (ValueError, TypeError):
                                 _LOGGER.warning(
-                                    "[%s] Packet delay %s state (%s ms) is invalid, using default %dms",
+                                    "[%s] Could not parse packet delay from %s state '%s', using default %dms",
                                     self.mac_address, delay_entity_id, state.state, DEFAULT_PACKET_DELAY_MS
                                 )
                                 delay_ms = DEFAULT_PACKET_DELAY_MS
-                            else:
-                                _LOGGER.debug("[%s] Using packet delay from %s: %d ms", self.mac_address, delay_entity_id, delay_ms)
-                        except (ValueError, TypeError):
+                        else:
                             _LOGGER.warning(
-                                "[%s] Could not parse packet delay from %s state '%s', using default %dms",
-                                self.mac_address, delay_entity_id, state.state, DEFAULT_PACKET_DELAY_MS
+                                "[%s] Packet delay entity %s state is unavailable (%s), using default %dms",
+                                self.mac_address, delay_entity_id, state.state if state else "None", DEFAULT_PACKET_DELAY_MS
                             )
-                            delay_ms = DEFAULT_PACKET_DELAY_MS
+                            # Keep default delay_ms
                     else:
                         _LOGGER.warning(
-                            "[%s] Packet delay entity %s state is unavailable (%s), using default %dms",
-                            self.mac_address, delay_entity_id, state.state if state else "None", DEFAULT_PACKET_DELAY_MS
+                            "[%s] Packet delay entity with unique ID %s not found, using default %dms",
+                            self.mac_address, number_unique_id, DEFAULT_PACKET_DELAY_MS
                         )
-                        delay_ms = DEFAULT_PACKET_DELAY_MS
-                else:
-                    _LOGGER.warning(
-                        "[%s] Packet delay entity with unique ID %s not found, using default %dms",
-                        self.mac_address, number_unique_id, DEFAULT_PACKET_DELAY_MS
-                    )
-                    delay_ms = DEFAULT_PACKET_DELAY_MS
+                        # Keep default delay_ms
+                    # End of BLE-specific delay lookup
                 # --- End Get Packet Delay ---
 
                 # --- Send based on mode ---
