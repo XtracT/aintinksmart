@@ -21,6 +21,9 @@ from .const import (
     ATTR_IMAGE_DATA,
     ATTR_IMAGE_ENTITY_ID,
     ATTR_MODE,
+    CONF_COMM_MODE, # Added
+    COMM_MODE_MQTT, # Added
+    DEFAULT_COMM_MODE, # Added
 )
 # Import the device manager class
 from .device import AintinksmartDevice
@@ -42,22 +45,38 @@ SERVICE_SEND_IMAGE_SCHEMA = vol.Schema(
 )
 
 
+async def options_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Handle options update."""
+    _LOGGER.debug("Options updated for %s, reloading entry", entry.entry_id)
+    # Reload the integration entry to apply changes
+    await hass.config_entries.async_reload(entry.entry_id)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Ain't Ink Smart from a config entry."""
     try:
         hass.data.setdefault(DOMAIN, {})
         mac_address = entry.data[CONF_MAC]
 
-        _LOGGER.info("Setting up Ain't Ink Smart device: %s", mac_address)
+        _LOGGER.info("Setting up Ain't Ink Smart device: %s with options %s", mac_address, entry.options)
+
+        # Check if MQTT mode is selected and wait for MQTT component if necessary
+        comm_mode = entry.options.get(CONF_COMM_MODE, DEFAULT_COMM_MODE)
+        if comm_mode == COMM_MODE_MQTT:
+            _LOGGER.debug("[%s] MQTT mode selected, ensuring MQTT component is loaded", mac_address)
+            if not await hass.config_entries.async_wait_component(entry, "mqtt"):
+                _LOGGER.error("[%s] MQTT component failed to load", mac_address)
+                return False
+            _LOGGER.debug("[%s] MQTT component loaded successfully", mac_address)
 
         # Instantiate the device manager
         device_manager = AintinksmartDevice(hass, entry)
         try:
-            # Perform initial setup (find BLE device, register callbacks)
+            # Perform initial setup (find BLE device or setup MQTT listeners)
             await device_manager.async_init()
         except Exception as err:  # Catch potential errors during init
             # ConfigEntryNotReady should ideally be raised by async_init if needed
-            _LOGGER.error("Error initializing device %s: %s", mac_address, err)
+            _LOGGER.error("Error initializing device %s: %s", mac_address, err, exc_info=True)
             # Clean up if init fails partially? Depends on async_init implementation
             # await device_manager.async_unload() # Example cleanup
             raise ConfigEntryNotReady(f"Failed to initialize device {mac_address}: {err}") from err
@@ -65,7 +84,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Store the manager instance
         hass.data[DOMAIN][entry.entry_id] = device_manager
 
-        # Set up platforms (sensor, camera)
+        # Add listener for options flow updates
+        entry.async_on_unload(entry.add_update_listener(options_update_listener))
+
+        # Set up platforms (sensor, camera, etc.)
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
         # --- Register Service Call ---
@@ -151,7 +173,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return True
 
     except Exception as e:
-        _LOGGER.error("Exception in async_setup_entry: %s", e, exc_info=True)
+        _LOGGER.error("Exception in async_setup_entry for %s: %s", mac_address, e, exc_info=True)
         return False
 
 

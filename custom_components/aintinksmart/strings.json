@@ -3,10 +3,10 @@
     "step": {
       "user": {
         "title": "Set up Ain't Ink Smart Display",
-        "description": "Choose a discovered device or enter the MAC address manually.",
+        "description": "Attempting discovery via Bluetooth and MQTT (using default topic). Choose an option below.",
         "menu_options": {
-          "pick_device": "Choose a discovered device",
-          "manual_entry": "Enter MAC address manually"
+          "pick_device": "Choose a discovered device (waits ~{discovery_timeout}s)",
+          "manual_entry": "Enter device details manually"
         },
         "data": {
           "mac_address": "MAC Address"
@@ -14,6 +14,7 @@
       },
       "pick_device": {
         "title": "Select Discovered Device",
+        "description": "Found {count} device(s) via Bluetooth and/or MQTT scan.",
         "data": {
           "address": "Device"
         }
@@ -21,38 +22,38 @@
       "manual_entry": {
         "title": "Enter MAC Address Manually",
         "data": {
-          "mac_address": "MAC Address (e.g., AA:BB:CC:DD:EE:FF)"
+          "mac_address": "MAC Address (e.g., AA:BB:CC:DD:EE:FF or AA-BB-CC-DD-EE-FF)"
         }
       },
-      "bluetooth_confirm": {
-        "title": "Confirm Discovered Device",
-        "description": "Do you want to set up the Ain't Ink Smart display named '{name}'?"
+      "configure_communication": {
+        "title": "Configure Communication",
+        "description": "Choose how Home Assistant should communicate with the display at {mac_address}.",
+        "data": {
+          "communication_mode": "Communication Mode",
+          "mqtt_base_topic": "MQTT Gateway Base Topic (only used if Mode is MQTT)"
+        }
       }
     },
     "error": {
       "invalid_mac": "Invalid MAC address format. Please use XX:XX:XX:XX:XX:XX.",
       "cannot_connect": "Unable to connect to the device. Ensure it's powered on and in range.",
       "unknown": "An unknown error occurred.",
-      "discovery_error": "An error occurred during device discovery."
+      "discovery_error": "An error occurred during device discovery.",
+      "mqtt_topic_required": "MQTT Base Topic is required when Communication Mode is set to MQTT Gateway."
     },
     "abort": {
       "already_configured": "Device is already configured.",
       "not_supported": "Device not supported by this integration (check name/advertisement).",
-      "discovery_error": "An error occurred during device discovery."
+      "discovery_error": "An error occurred during device discovery.",
+      "no_devices_found": "No compatible devices found via Bluetooth or MQTT scan. Try manual entry or check device power/range and MQTT gateway status (if applicable)."
     }
   },
-  "options": {
-    "step": {
-      "init": {
-        "title": "Ain't Ink Smart Options",
-        "description": "Configure automatic updates from a source image entity.",
-        "data": {
-          "packet_delay": "Packet Delay (seconds, e.g., 0.02)"
+  "selector": {
+      "comm_mode_options": {
+        "options": {
+          "ble": "Direct BLE",
+          "mqtt": "MQTT Gateway"
         }
       }
-    },
-    "error": {
-        "invalid_delay": "Invalid packet delay value. Must be a positive number."
-    }
   }
 }

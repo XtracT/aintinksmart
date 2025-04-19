@@ -15,10 +15,14 @@ PLATFORMS: Final = [
 # Configuration keys
 CONF_MAC: Final = "mac_address"
 NUMBER_KEY_PACKET_DELAY = "packet_delay"
+CONF_COMM_MODE: Final = "communication_mode"
+CONF_MQTT_BASE_TOPIC: Final = "mqtt_base_topic"
 
 # Default values
 DEFAULT_NAME: Final = "Ain't Ink Smart Display"
 DEFAULT_PACKET_DELAY_MS = 20
+DEFAULT_COMM_MODE: Final = "ble" # Default to BLE
+DEFAULT_MQTT_BASE_TOPIC: Final = "aintinksmart/gateway"
 
 # Status States (can be expanded)
 STATE_IDLE: Final = "idle"
@@ -33,6 +37,10 @@ STATE_ERROR_IMAGE_FETCH: Final = "image_fetch_error"
 STATE_ERROR_IMAGE_PROCESS: Final = "image_process_error"
 STATE_ERROR_UNKNOWN: Final = "unknown_error"
 STATE_UNAVAILABLE: Final = "unavailable"  # Standard HA state
+
+# Communication Modes
+COMM_MODE_BLE: Final = "ble"
+COMM_MODE_MQTT: Final = "mqtt"
 
 # Attributes
 ATTR_LAST_UPDATE: Final = "last_update"

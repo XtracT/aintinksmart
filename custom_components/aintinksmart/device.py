@@ -13,15 +13,19 @@ from bleak.backends.device import BLEDevice
 from bleak.exc import BleakError
 import voluptuous as vol # For service call validation
 
+from homeassistant.components import mqtt # Added
 from homeassistant.components.bluetooth import (
     BluetoothServiceInfoBleak,
     async_ble_device_from_address,
     async_register_callback,
+    async_scanner_count, # Added to check if BT is enabled
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.core import HomeAssistant, ServiceCall, callback, HassJob
 from homeassistant.const import STATE_UNAVAILABLE as HA_STATE_UNAVAILABLE # Avoid confusion
+from homeassistant.exceptions import HomeAssistantError # Added
 from homeassistant.helpers import aiohttp_client, device_registry as dr, entity_registry as er
+from homeassistant.helpers.event import async_call_later # Added for MQTT timeout
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util # Import datetime utility
 
@@ -29,18 +33,30 @@ from homeassistant.util import dt as dt_util # Import datetime utility
 from .const import (
     DOMAIN,
     CONF_MAC,
+    CONF_COMM_MODE, # Added
+    CONF_MQTT_BASE_TOPIC, # Added
+    COMM_MODE_BLE, # Added
+    COMM_MODE_MQTT, # Added
+    DEFAULT_COMM_MODE, # Added
+    DEFAULT_MQTT_BASE_TOPIC, # Added
     STATE_IDLE,
     STATE_CONNECTING,
     STATE_SENDING,
     STATE_ERROR,
     STATE_SUCCESS,
+    STATE_ERROR_CONNECTION, # Added
+    STATE_ERROR_TIMEOUT, # Added
+    STATE_ERROR_SEND, # Added
+    STATE_ERROR_IMAGE_FETCH, # Added
+    STATE_ERROR_IMAGE_PROCESS, # Added
+    STATE_ERROR_UNKNOWN, # Added
     ATTR_LAST_UPDATE,
     ATTR_LAST_ERROR,
     ATTR_IMAGE_DATA,
     ATTR_IMAGE_ENTITY_ID,
     ATTR_MODE,
-    NUMBER_KEY_PACKET_DELAY, # Added
-    DEFAULT_PACKET_DELAY_MS, # Added
+    NUMBER_KEY_PACKET_DELAY,
+    DEFAULT_PACKET_DELAY_MS,
 )
 from .helpers import (
     ImageProcessor,
@@ -51,11 +67,13 @@ from .helpers import (
     PacketBuilderError,
 )
 from .ble_comms import async_send_packets_ble, BleCommunicationError
+from .mqtt_comms import async_send_packets_mqtt, MqttCommunicationError # Added
 
 _LOGGER = logging.getLogger(__name__)
 
 # Timeout for the entire send operation
-SEND_TIMEOUT = 90.0 # Seconds
+SEND_TIMEOUT = 90.0 # Seconds for BLE/MQTT send attempt including processing
+MQTT_STATUS_TIMEOUT = 120.0 # Seconds to wait for a final status from MQTT gateway after sending
 
 class AintinksmartDevice:
     """Manages state and communication for a single Ain't Ink Smart device."""
@@ -66,61 +84,69 @@ class AintinksmartDevice:
         self.entry = entry
         self.mac_address = entry.data[CONF_MAC]
         self.formatted_mac = dr.format_mac(self.mac_address)
-        self.name = f"Ain't Ink Smart {self.mac_address}"
+        self.name = f"Ain't Ink Smart {self.mac_address}" # Used for logging prefix
 
+        # Communication mode specifics
+        self._comm_mode: str = DEFAULT_COMM_MODE
+        self._mqtt_base_topic: str | None = None
         self._ble_device: BLEDevice | None = None
+        self._cancel_bluetooth_callback: callable | None = None
+        self._cancel_mqtt_subscription: callable | None = None
+        self._mqtt_status_timeout_task: asyncio.TimerHandle | None = None
+
+        # State tracking
         self._status: str = STATE_IDLE
         self._last_error: str | None = None
         self._last_update: datetime | None = None
-        self._last_image_bytes: bytes | None = None
+        self._last_image_bytes: bytes | None = None # Last successfully sent image
+        self._pending_image_bytes: bytes | None = None # Image currently being sent (for MQTT success handling)
         self._send_lock = asyncio.Lock()  # Prevent concurrent sends
-        self._update_listeners: list[callable] = []  # Simple listener pattern for now
-        self._cancel_bluetooth_callback: callable | None = None
+        self._update_listeners: list[callable] = []  # Simple listener pattern for entities
 
+        # Helpers
         self._image_processor = ImageProcessor()
         self._protocol_formatter = ProtocolFormatter()
         self._packet_builder = PacketBuilder()
 
-        # Options and listeners for auto-update
-        self._options = dict(entry.options)
+        # Listeners for source entity updates
         self._cancel_state_listener: callable | None = None
-        self._options_update_remove: callable | None = None
-        self._options_update_remove = entry.add_update_listener(self._handle_options_update)
+        # Note: Options update listener is added in __init__.py and calls _handle_options_update
 
     @property
     def is_available(self) -> bool:
-        """Return True if the device is considered available."""
-        # Available if we have a BLEDevice object associated
-        return self._ble_device is not None
+        """Return True if the device is considered available based on comm mode."""
+        if self._comm_mode == COMM_MODE_BLE:
+            # Available if BT is enabled and we have a BLEDevice object
+            return async_scanner_count(self.hass, connectable=True) > 0 and self._ble_device is not None
+        if self._comm_mode == COMM_MODE_MQTT:
+            # Available if MQTT is connected
+            # Could add checks for recent gateway status messages if needed
+            return mqtt.is_connected(self.hass)
+        return False # Should not happen
 
     @property
     def state_data(self) -> dict[str, Any]:
         """Return the current state data for entities."""
+        is_available_status = self.is_available # Evaluate the property here
         return {
-            "status": self._status if self.is_available else HA_STATE_UNAVAILABLE,
+            "status": self._status if is_available_status else HA_STATE_UNAVAILABLE,
             ATTR_LAST_ERROR: self._last_error,
             ATTR_LAST_UPDATE: self._last_update,
             "last_image_bytes": self._last_image_bytes, # For camera
-            "is_available": self.is_available,
+            "is_available": is_available_status, # Use the evaluated value
         }
 
     async def async_init(self) -> None:
-        """Perform initial setup and try to find the BLE device."""
+        """Perform initial setup based on configuration."""
         _LOGGER.debug("[%s] Initializing device manager", self.mac_address)
-        self._ble_device = async_ble_device_from_address(self.hass, self.mac_address.upper(), connectable=True)
-        if not self._ble_device:
-            _LOGGER.warning("[%s] Device not found initially via Bluetooth", self.mac_address)
-            # Optionally raise ConfigEntryNotReady here if initial connection is mandatory
-            # raise ConfigEntryNotReady(f"Device {self.mac_address} not found")
 
-        # Register callback for Bluetooth device updates
-        self._cancel_bluetooth_callback = async_register_callback(
-            self.hass, self._handle_bluetooth_update, {"address": self.mac_address.upper()}, mode="active"
-        )
-        self._update_state(STATE_IDLE if self.is_available else HA_STATE_UNAVAILABLE)
+        # Read options and set up communication mode
+        self._comm_mode = self.entry.data.get(CONF_COMM_MODE, DEFAULT_COMM_MODE)
+        self._mqtt_base_topic = self.entry.data.get(CONF_MQTT_BASE_TOPIC) # Can be None
 
-        # Setup source listener and trigger initial update if enabled
-        # Defer listener setup until HA is fully started
+        await self.async_setup_communication_mode()
+
+        # Defer source listener setup until HA is fully started
         self.hass.bus.async_listen_once(
             "homeassistant_started", self._async_post_startup
         )
@@ -130,20 +156,158 @@ class AintinksmartDevice:
         _LOGGER.debug("[%s] Home Assistant started, setting up listeners", self.mac_address)
         self._setup_source_listener()
 
+    async def async_setup_communication_mode(self) -> None:
+        """Set up listeners and initial state based on the current communication mode."""
+        _LOGGER.debug("[%s] Setting up communication mode: %s", self.mac_address, self._comm_mode)
+        await self.async_cleanup_communication_mode() # Clean up previous mode's listeners
+
+        if self._comm_mode == COMM_MODE_BLE:
+            if async_scanner_count(self.hass, connectable=True) < 1:
+                _LOGGER.warning("[%s] Bluetooth scanner is not available or enabled", self.mac_address)
+                self._update_state(HA_STATE_UNAVAILABLE, "Bluetooth not available")
+                return
+
+            self._ble_device = async_ble_device_from_address(self.hass, self.mac_address.upper(), connectable=True)
+            if not self._ble_device:
+                _LOGGER.warning("[%s] BLE device not found initially", self.mac_address)
+
+            self._cancel_bluetooth_callback = async_register_callback(
+                self.hass, self._handle_bluetooth_update, {"address": self.mac_address.upper()}, mode="active"
+            )
+            self._update_state(STATE_IDLE if self.is_available else HA_STATE_UNAVAILABLE)
+
+        elif self._comm_mode == COMM_MODE_MQTT:
+            if not self._mqtt_base_topic:
+                _LOGGER.error("[%s] MQTT mode selected but base topic is not configured", self.mac_address)
+                self._update_state(STATE_ERROR, "MQTT base topic not configured")
+                return
+
+            if not mqtt.is_connected(self.hass):
+                _LOGGER.warning("[%s] MQTT integration is not connected", self.mac_address)
+                # State will be updated by MQTT connection callbacks if it connects later
+                self._update_state(HA_STATE_UNAVAILABLE, "MQTT not connected")
+                # We still subscribe, it will work once MQTT connects
+
+            mac_no_colons = self.mac_address.replace(":", "").lower()
+            status_topic = f"{self._mqtt_base_topic}/display/{mac_no_colons}/status"
+
+            _LOGGER.info("[%s] Subscribing to MQTT status topic: %s", self.mac_address, status_topic)
+            try:
+                self._cancel_mqtt_subscription = await mqtt.async_subscribe(
+                    self.hass, status_topic, self._handle_mqtt_status_update, qos=1
+                )
+            except HomeAssistantError as e:
+                _LOGGER.error("[%s] Failed to subscribe to MQTT topic %s: %s", self.mac_address, status_topic, e)
+                self._update_state(STATE_ERROR, f"MQTT subscription failed: {e}")
+                return
+
+            # Set initial state based on MQTT connection status
+            self._update_state(STATE_IDLE if mqtt.is_connected(self.hass) else HA_STATE_UNAVAILABLE)
+
+        else:
+            _LOGGER.error("[%s] Unknown communication mode: %s", self.mac_address, self._comm_mode)
+            self._update_state(STATE_ERROR, f"Invalid communication mode: {self._comm_mode}")
+
+    async def async_cleanup_communication_mode(self) -> None:
+        """Remove listeners/callbacks for the current communication mode."""
+        _LOGGER.debug("[%s] Cleaning up communication mode listeners", self.mac_address)
+        if self._cancel_bluetooth_callback:
+            _LOGGER.debug("[%s] Cancelling Bluetooth callback", self.mac_address)
+            self._cancel_bluetooth_callback()
+            self._cancel_bluetooth_callback = None
+        if self._cancel_mqtt_subscription:
+            _LOGGER.debug("[%s] Unsubscribing from MQTT topics", self.mac_address)
+            try:
+                await self._cancel_mqtt_subscription()
+            except HomeAssistantError as e:
+                 _LOGGER.warning("[%s] Error unsubscribing from MQTT: %s", self.mac_address, e)
+            self._cancel_mqtt_subscription = None
+        if self._mqtt_status_timeout_task:
+            self._mqtt_status_timeout_task.cancel()
+            self._mqtt_status_timeout_task = None
+
+        self._ble_device = None # Clear BLE device reference
+
     @callback
     def _handle_bluetooth_update(
-        self, service_info: BluetoothServiceInfoBleak, change: Any # change type depends on HA version
+        self, service_info: BluetoothServiceInfoBleak, change: Any
     ) -> None:
-        """Handle updated Bluetooth device data."""
-        _LOGGER.debug("[%s] Bluetooth update received: %s", self.mac_address, service_info)
+        """Handle updated Bluetooth device data (only relevant in BLE mode)."""
+        if self._comm_mode != COMM_MODE_BLE:
+            return # Ignore if not in BLE mode
+
+        _LOGGER.debug("[%s] Bluetooth update received: %s", self.mac_address, service_info.device)
+        was_available = self.is_available
         self._ble_device = service_info.device
-        # Update state if availability changed
-        if self._status == HA_STATE_UNAVAILABLE and self.is_available:
-             self._update_state(STATE_IDLE)
-        elif self._status != HA_STATE_UNAVAILABLE and not self.is_available:
-             self._update_state(HA_STATE_UNAVAILABLE, "Device became unavailable")
+        now_available = self.is_available
+
+        if not was_available and now_available:
+            self._update_state(STATE_IDLE)
+        elif was_available and not now_available:
+            self._update_state(HA_STATE_UNAVAILABLE, "Device became unavailable")
+        elif self._status == HA_STATE_UNAVAILABLE and now_available: # Handle case where BT adapter comes online
+            self._update_state(STATE_IDLE)
         else:
-             self._notify_listeners() # Notify even if state didn't change, maybe RSSI updated
+            self._notify_listeners() # Notify for potential RSSI changes etc.
+
+    @callback
+    def _handle_mqtt_status_update(self, msg: mqtt.models.MQTTMessage) -> None:
+        """Handle status messages received from the MQTT gateway."""
+        if self._comm_mode != COMM_MODE_MQTT:
+            return # Should not happen if unsubscribed correctly
+
+        payload = msg.payload.decode("utf-8").lower() # Assuming simple string status
+        _LOGGER.info("[%s] Received MQTT status update: '%s'", self.mac_address, payload)
+
+        # Cancel pending timeout task if we receive any status
+        if self._mqtt_status_timeout_task:
+            self._mqtt_status_timeout_task.cancel()
+            self._mqtt_status_timeout_task = None
+
+        # Map gateway status to internal states
+        # This mapping depends heavily on the firmware's published statuses
+        # Example mapping (adjust based on actual firmware):
+        new_state = STATE_IDLE
+        error_msg = None
+
+        if "connected_ble" in payload:
+            new_state = STATE_CONNECTING # Or keep sending?
+        elif "sending_packets" in payload:
+            new_state = STATE_SENDING
+        elif "success" in payload:
+            new_state = STATE_SUCCESS
+        elif "error_connect" in payload:
+            new_state = STATE_ERROR_CONNECTION
+            error_msg = "Gateway failed to connect to display"
+        elif "error_send" in payload:
+            new_state = STATE_ERROR_SEND
+            error_msg = "Gateway failed to send packets"
+        elif "error_timeout" in payload:
+            new_state = STATE_ERROR_TIMEOUT
+            error_msg = "Gateway timed out during operation"
+        elif "error" in payload: # Generic error
+            new_state = STATE_ERROR_UNKNOWN
+            error_msg = f"Gateway reported error: {payload}"
+        elif "idle" in payload:
+            new_state = STATE_IDLE
+        else:
+            _LOGGER.warning("[%s] Unhandled MQTT status payload: %s", self.mac_address, payload)
+            # Optionally set to unknown or keep previous state?
+            # For now, assume idle if not recognized after a send attempt
+            if self._status == STATE_SENDING:
+                 new_state = STATE_IDLE # Revert to idle if unrecognized status during send
+            else:
+                 return # Ignore if not sending and status is weird
+
+        self._update_state(new_state, error_msg)
+
+    @callback
+    def _handle_mqtt_status_timeout(self) -> None:
+        """Handle timeout waiting for MQTT status after sending."""
+        _LOGGER.warning("[%s] Timed out waiting for final MQTT status update", self.mac_address)
+        self._mqtt_status_timeout_task = None
+        if self._status == STATE_SENDING: # Only update if still waiting
+            self._update_state(STATE_ERROR_TIMEOUT, "No final status received from gateway")
 
 
     async def async_handle_send_image_service(self, call: ServiceCall) -> None:
@@ -217,8 +381,9 @@ class AintinksmartDevice:
                 from .const import STATE_ERROR_UNKNOWN
                 self._update_state(STATE_ERROR_UNKNOWN, "No image source provided")
     async def _async_send_image_internal(self, image_bytes: bytes, mode: str) -> bool:
-        """Process, format, build packets, and send image via BLE. Return True on success."""
-        self._update_state(STATE_CONNECTING)
+        """Process, format, build packets, and send image via configured mode. Return True on success."""
+        self._update_state(STATE_CONNECTING) # Initial state for both modes
+        self._pending_image_bytes = image_bytes # Store for potential MQTT success handling
         success = False
         try:
             async with async_timeout.timeout(SEND_TIMEOUT):
@@ -234,10 +399,8 @@ class AintinksmartDevice:
                 _LOGGER.debug("[%s] Building packets...", self.mac_address)
                 packets = self._packet_builder.build_packets(hex_payload, self.mac_address)
 
-                # 4. Send via BLE
+                # 4. Send via configured mode
                 self._update_state(STATE_SENDING)
-                if self._ble_device is None:
-                    raise BleCommunicationError("BLE device became unavailable before sending")
 
                 # --- Get Packet Delay from Number Entity ---
                 ent_reg = er.async_get(self.hass)
@@ -278,67 +441,126 @@ class AintinksmartDevice:
                     delay_ms = DEFAULT_PACKET_DELAY_MS
                 # --- End Get Packet Delay ---
 
-                success = await async_send_packets_ble(self.hass, self._ble_device, packets, delay_ms)
+                # --- Send based on mode ---
+                if self._comm_mode == COMM_MODE_BLE:
+                    if not self.is_available or self._ble_device is None:
+                        raise BleCommunicationError("BLE device became unavailable before sending")
+                    success = await async_send_packets_ble(self.hass, self._ble_device, packets, delay_ms)
+                    if success:
+                        self._update_state(STATE_SUCCESS)
+                        # _last_image_bytes updated in _update_state for SUCCESS
+                    else:
+                        # Error state likely already set by BleakError exception below
+                        # If no exception but returns False, set generic send error
+                        if self._status == STATE_SENDING:
+                            self._update_state(STATE_ERROR_SEND, "BLE send command returned false")
 
-            if success:
-                self._update_state(STATE_SUCCESS)
-                self._last_image_bytes = image_bytes  # Store for camera on success
-            else:
-                from .const import STATE_ERROR_SEND
-                from .const import STATE_ERROR_SEND
-                self._update_state(STATE_ERROR_SEND, "Sending failed (unknown reason)")
+                elif self._comm_mode == COMM_MODE_MQTT:
+                    if not self.is_available:
+                        raise MqttCommunicationError("MQTT is not connected")
+                    if not self._mqtt_base_topic:
+                        raise MqttCommunicationError("MQTT base topic not configured")
+
+                    # Publish packets via MQTT
+                    publish_success = await async_send_packets_mqtt(
+                        self.hass, self._mqtt_base_topic, self.mac_address, packets, delay_ms
+                    )
+
+                    if publish_success:
+                        _LOGGER.info("[%s] MQTT packets published, waiting for gateway status...", self.mac_address)
+                        # Start timeout for waiting for final status
+                        if self._mqtt_status_timeout_task:
+                            self._mqtt_status_timeout_task.cancel()
+                        self._mqtt_status_timeout_task = self.hass.loop.call_later(
+                            MQTT_STATUS_TIMEOUT, HassJob(self._handle_mqtt_status_timeout).target
+                        )
+                        # Keep state as STATE_SENDING, success determined by _handle_mqtt_status_update
+                        success = True # Indicate publish was ok, but overall success pending
+                    else:
+                        # Error state should be set by MqttCommunicationError exception below
+                        success = False
+                        if self._status == STATE_SENDING:
+                            self._update_state(STATE_ERROR_SEND, "MQTT publish command returned false")
+
+                else:
+                    _LOGGER.error("[%s] Unknown communication mode for sending: %s", self.mac_address, self._comm_mode)
+                    self._update_state(STATE_ERROR_UNKNOWN, f"Invalid comm mode: {self._comm_mode}")
+                    success = False
+                # --- End Send based on mode ---
+
+            # Note: State updates for success/failure are handled within the mode blocks
+            # or by the exception handlers below.
 
         except (
             ImageProcessingError,
             ProtocolFormattingError,
             PacketBuilderError,
-            BleCommunicationError,
-            BleakError,
-            asyncio.TimeoutError,
+            BleCommunicationError, # BLE specific
+            BleakError,            # BLE specific
+            MqttCommunicationError,# MQTT specific
+            asyncio.TimeoutError,  # Generic timeout for the whole operation
         ) as e:
             _LOGGER.error("[%s] Send operation failed: %s", self.mac_address, e)
-            from .const import STATE_ERROR_SEND, STATE_ERROR_IMAGE_PROCESS, STATE_ERROR_CONNECTION, STATE_ERROR_TIMEOUT
+            # Map specific exceptions to error states
+            error_state = STATE_ERROR_UNKNOWN
+            error_message = f"Send failed: {e}"
+
             if isinstance(e, (ImageProcessingError, ProtocolFormattingError, PacketBuilderError)):
                 error_state = STATE_ERROR_IMAGE_PROCESS
-            elif isinstance(e, BleCommunicationError):
-                error_state = STATE_ERROR_CONNECTION
+            elif isinstance(e, (BleCommunicationError, MqttCommunicationError)):
+                # Covers BLE connection/send issues and MQTT publish issues
+                error_state = STATE_ERROR_CONNECTION # Use connection error for MQTT publish failure too
+            elif isinstance(e, BleakError):
+                # More specific BLE errors
+                error_state = STATE_ERROR_SEND
             elif isinstance(e, asyncio.TimeoutError):
                 error_state = STATE_ERROR_TIMEOUT
-            else: # BleakError
-                error_state = STATE_ERROR_SEND
-            from .const import STATE_ERROR_SEND, STATE_ERROR_IMAGE_PROCESS, STATE_ERROR_CONNECTION, STATE_ERROR_TIMEOUT
-            if isinstance(e, (ImageProcessingError, ProtocolFormattingError, PacketBuilderError)):
-                error_state = STATE_ERROR_IMAGE_PROCESS
-            elif isinstance(e, BleCommunicationError):
-                error_state = STATE_ERROR_CONNECTION
-            elif isinstance(e, asyncio.TimeoutError):
-                error_state = STATE_ERROR_TIMEOUT
-            else: # BleakError
-                error_state = STATE_ERROR_SEND
-            self._update_state(error_state, f"Send failed: {e}")
+                error_message = "Send operation timed out" # More specific message
+
+            self._update_state(error_state, error_message)
+            success = False # Ensure success is false if an exception occurred
         except Exception as e:
             _LOGGER.exception("[%s] Unexpected error during send operation", self.mac_address)
-            from .const import STATE_ERROR_UNKNOWN
-            from .const import STATE_ERROR_UNKNOWN
+            _LOGGER.exception("[%s] Unexpected error during send operation", self.mac_address)
             self._update_state(STATE_ERROR_UNKNOWN, f"Unexpected error: {e}")
+            success = False
         finally:
-            if self._status in [STATE_CONNECTING, STATE_SENDING] and not success:
-                if not self._last_error:
-                    # Keep the specific error state if already set
-                    if self._status not in [STATE_ERROR_CONNECTION, STATE_ERROR_TIMEOUT, STATE_ERROR_SEND, STATE_ERROR_IMAGE_PROCESS, STATE_ERROR_UNKNOWN]:
-                        from .const import STATE_ERROR_UNKNOWN
-                        self._update_state(STATE_ERROR_UNKNOWN, "Send operation did not complete")
-                    # else: # Keep existing error state and message
-                    #    self._update_state(self._status, self._last_error)
+            # If we finished sending but ended in a non-final state (and no specific error was set)
+            # set a generic error state. This shouldn't happen often with the new logic.
+            if self._status in [STATE_CONNECTING, STATE_SENDING]:
+                _LOGGER.warning("[%s] Send operation finished in intermediate state: %s", self.mac_address, self._status)
+                if not self._last_error: # Avoid overwriting specific errors set above
+                    self._update_state(STATE_ERROR_UNKNOWN, "Send operation did not complete successfully")
+            # Clear pending image if the operation failed
+            if not success or self._status != STATE_SUCCESS:
+                self._pending_image_bytes = None
+
+        # Return True only if the initial send command was successful (for MQTT, final success is async)
+        # For BLE, this reflects the actual send result.
         return success
 
 
     @callback
+    @callback
     def _update_state(self, new_state: str, error: str | None = None) -> None:
         """Update the internal state and notify listeners."""
+        # Prevent redundant updates
+        if new_state == self._status and error == self._last_error:
+            return
+
         self._status = new_state
         self._last_error = error if error else None
         self._last_update = dt_util.utcnow()
+
+        # Handle storing image on successful send (especially for MQTT async success)
+        if new_state == STATE_SUCCESS and self._pending_image_bytes is not None:
+            _LOGGER.debug("[%s] Storing successfully sent image (%d bytes)", self.mac_address, len(self._pending_image_bytes))
+            self._last_image_bytes = self._pending_image_bytes
+            self._pending_image_bytes = None # Clear pending image
+        elif new_state != STATE_SENDING and new_state != STATE_CONNECTING:
+            # Clear pending image if send fails or completes unsuccessfully
+            self._pending_image_bytes = None
+
         _LOGGER.info("[%s] State updated: %s (Error: %s)", self.mac_address, self._status, self._last_error)
         self._notify_listeners()
 
@@ -364,23 +586,22 @@ class AintinksmartDevice:
     async def async_unload(self) -> None:
         """Clean up resources."""
         _LOGGER.debug("[%s] Unloading device manager", self.mac_address)
-        if self._cancel_bluetooth_callback:
-            self._cancel_bluetooth_callback()
-            self._cancel_bluetooth_callback = None
+
+        # Clean up communication mode listeners
+        await self.async_cleanup_communication_mode()
+
+        # Clean up source entity listener
         if self._cancel_state_listener:
             self._cancel_state_listener()
             self._cancel_state_listener = None
-        if self._options_update_remove:
-            self._options_update_remove()
-            self._options_update_remove = None
-        # Cancel any pending tasks if necessary (e.g., if using background tasks)
+
+        # Clear entity listeners
         self._update_listeners.clear()
 
-    async def _handle_options_update(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
-        """Handle options update."""
-        _LOGGER.debug("[%s] Options updated, reloading options and listeners", self.mac_address)
-        self._options = dict(entry.options)
-        self._setup_source_listener()
+    # Note: The options update listener in __init__.py triggers a full reload,
+    # so we don't need a specific _handle_options_update method here anymore
+    # to just re-read options. The reload handles cleanup via async_unload
+    # and setup via async_setup_entry / async_init.
 
     def _setup_source_listener(self) -> None:
         """Set up or cancel the state listener for the source image entity."""
