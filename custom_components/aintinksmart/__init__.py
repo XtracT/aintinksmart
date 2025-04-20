@@ -90,7 +90,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Set up platforms (sensor, camera, etc.)
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-        # --- Register Service Call ---
+        # --- Define Service Handlers ---
         async def handle_send_image(call: ServiceCall) -> None:
             """Handle the send_image service call."""
             config_entry_ids = await async_extract_config_entry_ids(hass, call)
@@ -120,8 +120,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             else:
                 _LOGGER.warning("Service call %s did not target any known devices.", SERVICE_SEND_IMAGE)
 
-        # Register the service only once
-        # Register force_update service
         async def handle_force_update(call: ServiceCall) -> None:
             """Handle the force_update service call."""
             entity_ids = call.data.get("entity_id")
@@ -169,6 +167,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
             if tasks:
                 await asyncio.gather(*tasks)
+
+        # --- Register Services ---
+        # Register services only once per domain
+        if not hass.services.has_service(DOMAIN, SERVICE_SEND_IMAGE):
+            hass.services.async_register(
+                DOMAIN,
+                SERVICE_SEND_IMAGE,
+                handle_send_image, # Now defined above
+                schema=SERVICE_SEND_IMAGE_SCHEMA,
+            )
+            _LOGGER.debug("Registered service: %s.%s", DOMAIN, SERVICE_SEND_IMAGE)
+
+        if not hass.services.has_service(DOMAIN, "force_update"):
+             hass.services.async_register(
+                 DOMAIN,
+                 "force_update",
+                 handle_force_update, # Now defined above
+                 # Schema is loaded from services.yaml by HA
+             )
+             _LOGGER.debug("Registered service: %s.force_update", DOMAIN)
 
         return True
 

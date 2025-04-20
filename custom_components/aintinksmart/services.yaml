@@ -1,24 +1,4 @@
 # Existing send_image service
-send_image:
-  name: Send Image
-  description: Send an image to the Ain't Ink Smart display.
-  fields:
-    image_data:
-      name: Image Data (Base64)
-      description: Base64-encoded image data to send.
-      required: false
-      example: "iVBORw0KGgoAAAANSUhEUgAA..."
-    image_entity_id:
-      name: Image Entity ID
-      description: Entity ID of an image entity to fetch the image from.
-      required: false
-      example: "camera.my_camera"
-    mode:
-      name: Mode
-      description: Color mode, either 'bw' or 'bwr'.
-      required: true
-      example: "bwr"
-
 force_update:
   name: Force Update from Source
   description: Force upload the configured source image entity to the display, regardless of whether it changed.
