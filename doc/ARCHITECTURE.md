@@ -106,7 +106,7 @@ The Python service runs as a background process, listening for image sending and
 
 ### Configuration
 
-Primarily configured via environment variables (see `README.md`). `BLE_ENABLED` and `USE_GATEWAY` determine the operating mode at startup.
+Primarily configured via environment variables (see `../README.md`). `BLE_ENABLED` and `USE_GATEWAY` determine the operating mode at startup.
 
 ## 3. ESP32 Firmware (`src/`)
 
@@ -130,5 +130,5 @@ Handled either directly by the Python service (`BleCommunicator` for sending, `B
 
 ## 5. CLI Scripts
 
-*   **`send_image_cli.py`:** Publishes image send requests to `MQTT_REQUEST_TOPIC`. Can optionally listen for results on a specified response topic.
-*   **`scan_ble_cli.py`:** Publishes scan requests to `MQTT_SCAN_REQUEST_TOPIC`. Listens for results on *both* the service's status topic (`MQTT_DEFAULT_STATUS_TOPIC`) and the ESP32's scan result topic (`{MQTT_GATEWAY_BASE_TOPIC}/bridge/scan_result`).
+*   **`send_image_cli.py`:** Publishes image send requests to `MQTT_REQUEST_TOPIC`. Can optionally listen for results on a specified response topic. See [`../scripts/send_image_cli.py`](../scripts/send_image_cli.py) for the script.
+*   **`scan_ble_cli.py`:** Publishes scan requests to `MQTT_SCAN_REQUEST_TOPIC`. Listens for results on *both* the service's status topic (`MQTT_DEFAULT_STATUS_TOPIC`) and the ESP32's scan result topic (`{MQTT_GATEWAY_BASE_TOPIC}/bridge/scan_result`). See [`../scripts/scan_ble_cli.py`](../scripts/scan_ble_cli.py) for the script.
