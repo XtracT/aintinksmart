@@ -10,6 +10,7 @@ PLATFORMS: Final = [
     Platform.CAMERA,
     Platform.BUTTON,
     Platform.SELECT,
+    Platform.SWITCH, # Add SWITCH platform
 ]
 
 # Configuration keys
@@ -61,3 +62,6 @@ ATTR_MODE: Final = "mode" # bw or bwr
 # BLE Details
 IMG_CHAR_UUID: Final = "00001525-1212-efde-1523-785feabcd123"
 # NOTIFY_CHAR_UUID: Final = "00001526-1212-efde-1523-785feabcd123" # Add if needed later
+
+# Entity Keys
+KEY_AUTO_UPDATE_SWITCH: Final = "auto_update_switch"

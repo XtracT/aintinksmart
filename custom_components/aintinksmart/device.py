@@ -107,6 +107,7 @@ class AintinksmartDevice:
         self._pending_image_bytes: bytes | None = None # Image currently being sent (for MQTT success handling)
         self._send_lock = asyncio.Lock()  # Prevent concurrent sends
         self._update_listeners: list[callable] = []  # Simple listener pattern for entities
+        self._auto_update_enabled: bool = True # Flag for the auto-update switch
 
         # Helpers
         self._image_processor = ImageProcessor()
@@ -631,6 +632,13 @@ class AintinksmartDevice:
         for listener in self._update_listeners:
             listener()
 
+    @callback
+    def async_set_auto_update_enabled(self, enabled: bool) -> None:
+        """Set the auto-update flag from the switch entity."""
+        _LOGGER.debug("[%s] Auto update set to: %s", self.mac_address, enabled)
+        self._auto_update_enabled = enabled
+        # No need to notify listeners here, the switch handles its own state
+
     async def async_unload(self) -> None:
         """Clean up resources."""
         _LOGGER.debug("[%s] Unloading device manager", self.mac_address)
@@ -700,6 +708,11 @@ class AintinksmartDevice:
 
     async def _trigger_update_from_source(self, source_entity_id: str, mode: str) -> None:
         """Fetch image from source entity and send it if different from last uploaded."""
+        # Check if auto-update is enabled first
+        if not self._auto_update_enabled:
+            _LOGGER.debug("[%s] Auto-update is disabled, skipping update from source %s", self.mac_address, source_entity_id)
+            return
+
         if not self.is_available:
             _LOGGER.warning("[%s] Device unavailable, skipping auto-update", self.mac_address)
             return

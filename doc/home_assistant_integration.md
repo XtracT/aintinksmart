@@ -89,13 +89,19 @@ For each configured display, the integration creates the following entities:
     *   Pressing this button immediately triggers an attempt to send the image from the currently selected **Source Entity** to the display, using the currently selected **Update Mode**.
     *   This bypasses the check for image differences, useful for forcing a refresh.
 
+*   **Enable Auto Update Switch (`switch.<display_name>_enable_auto_update`):**
+    *   A switch to enable or disable the automatic update functionality.
+    *   When **ON** (default), the integration monitors the selected **Source Entity** and sends updates to the display when the source image changes.
+    *   When **OFF**, automatic updates based on source entity changes are disabled. Manual updates via the **Force Update Button** or the `send_image` service are still possible.
+    *   The state of this switch is restored across Home Assistant restarts.
+
 ## Automatic Updates
 
 -   The integration automatically monitors the **Source Entity Select**.
 -   When you change the selected entity in the dropdown, the integration fetches the new source image.
 -   It compares the fetched image to the last image successfully sent to the display.
--   If the images are different, it sends the new image to the display using the mode selected in the **Update Mode Select**.
--   Updates are **not** performed on Home Assistant startup to prevent unnecessary refreshes; updates only occur when the selected source entity changes.
+-   If the images are different **and the Enable Auto Update switch is ON**, it sends the new image to the display using the mode selected in the **Update Mode Select**.
+-   Updates are **not** performed on Home Assistant startup to prevent unnecessary refreshes; updates only occur when the selected source entity changes **and auto-update is enabled**.
 
 ## Services
 
