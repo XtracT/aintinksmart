@@ -9,6 +9,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.restore_state import RestoreEntity # Import RestoreEntity
 
 from .const import DOMAIN
 
@@ -27,7 +28,7 @@ async def async_setup_entry(
 
 from .entity import AintinksmartEntity
 
-class SourceEntitySelect(AintinksmartEntity, SelectEntity):
+class SourceEntitySelect(AintinksmartEntity, SelectEntity, RestoreEntity): # Add RestoreEntity
     """Select entity to choose source image/camera."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry, device_manager) -> None:
@@ -47,9 +48,32 @@ class SourceEntitySelect(AintinksmartEntity, SelectEntity):
         self._attr_current_option = None
 
     async def async_added_to_hass(self) -> None:
-        """Populate options on add."""
+        """Run when entity about to be added, restore state."""
         await super().async_added_to_hass()
+
+        # Populate options first
         self._update_options()
+
+        # Attempt to restore the last state
+        last_state = await self.async_get_last_state()
+        restored = False
+        if last_state and last_state.state in self._attr_options:
+            self._attr_current_option = last_state.state
+            self._device_manager._source_entity_id_override = last_state.state
+            restored = True
+            _LOGGER.debug(
+                "Restored %s state to %s", self.entity_id, self._attr_current_option
+            )
+
+        # If not restored and no option set yet, set default
+        if not restored and not self._attr_current_option and self._attr_options:
+            self._attr_current_option = self._attr_options[0]
+            self._device_manager._source_entity_id_override = self._attr_options[0]
+            _LOGGER.debug(
+                "Setting default %s state to %s", self.entity_id, self._attr_current_option
+            )
+
+        # No need to call async_write_ha_state() here, HA handles it after setup
 
     @callback
     def _update_options(self):
@@ -59,11 +83,8 @@ class SourceEntitySelect(AintinksmartEntity, SelectEntity):
         for entity in entity_reg.entities.values():
             if entity.domain in ("camera", "image"):
                 options.append(entity.entity_id)
-        self._attr_options = options
-        # Set current option if unset
-        if not self._attr_current_option and options:
-            self._attr_current_option = options[0]
-        self.async_write_ha_state()
+        self._attr_options = sorted(options) # Sort for consistency
+        # Default setting moved to async_added_to_hass
 
     async def async_select_option(self, option: str) -> None:
         """Handle user selecting an option."""
@@ -72,7 +93,7 @@ class SourceEntitySelect(AintinksmartEntity, SelectEntity):
         self._device_manager._source_entity_id_override = option
         self.async_write_ha_state()
 
-class UpdateModeSelect(AintinksmartEntity, SelectEntity):
+class UpdateModeSelect(AintinksmartEntity, SelectEntity, RestoreEntity): # Add RestoreEntity
     """Select entity to choose update mode."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry, device_manager) -> None:
@@ -99,6 +120,18 @@ class UpdateModeSelect(AintinksmartEntity, SelectEntity):
         )
         self._attr_options = ["bw", "bwr"]
         self._attr_current_option = "bwr"
+
+    async def async_added_to_hass(self) -> None:
+        """Run when entity about to be added, restore state."""
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state and last_state.state in self._attr_options:
+            self._attr_current_option = last_state.state
+            self._device_manager._auto_update_mode_override = last_state.state
+            _LOGGER.debug(
+                "Restored %s state to %s", self.entity_id, self._attr_current_option
+            )
+        # If not restored, the default from __init__ remains
 
     async def async_select_option(self, option: str) -> None:
         """Handle user selecting an option."""
