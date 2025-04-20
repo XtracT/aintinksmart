@@ -1,13 +1,22 @@
 # Ain't Ink Smart E-Ink Display Project
 
-This repository contains the Home Assistant custom integration and optional ESP32 firmware for controlling certain Bluetooth Low Energy (BLE) e-ink displays.
+This repository contains the Home Assistant custom integration and optional ESP32 firmware for controlling certain Bluetooth Low Energy (BLE) e-ink displays, also known as Electronic Shelf Labels. In this case the software here can update displays that are identified as EasyTag in their BLE identifier. 
 
 The project provides two primary ways to interact with the displays:
 
 1.  **Home Assistant Integration:** A custom component for Home Assistant that allows seamless control and display updates from your smart home environment. This is the recommended method for most users.
 2.  **ESP32 MQTT Gateway Firmware:** Custom firmware for ESP32 devices that acts as a BLE-to-MQTT bridge, enabling control via MQTT messages. This is used by the Home Assistant integration in MQTT Gateway mode, or can be used independently.
 
+The main reason for adding a ESP32 MQTT-BLE gateway in between is because ESPHome BLE Proxy has not given (me) good results when it the image requires a high number of packets, because the BLE proxy functionality is not designed with this use case in mind. 
+
 Additionally, the repository includes a Python headless service and standalone CLI scripts for direct interaction or alternative use cases.
+
+## Compatibility
+
+| Size  | Resolution | Colors | Part Number | Tested Status | Notes |
+| :---- | :--------- | :----- | :---------- | :------------ | :---- |
+| 7.5"  | 800x480    | BWR    | AES0750     | Yes           |       |
+
 
 ## Home Assistant Integration
 
@@ -72,11 +81,6 @@ A set of Python CLI scripts are provided in the `scripts/` directory for direct 
 
 These scripts require Python 3.10+ and the libraries listed in `requirements.txt`. You can find the scripts in the [`scripts/` directory](scripts/).
 
-## Compatibility
-
-| Size  | Resolution | Colors | Part Number | Tested Status | Notes |
-| :---- | :--------- | :----- | :---------- | :------------ | :---- |
-| 7.5"  | 800x480    | BWR    | AES0750     | Yes           |       |
 
 ## Troubleshooting
 
