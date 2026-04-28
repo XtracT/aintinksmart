@@ -19,19 +19,19 @@
       "manual_entry": {
         "title": "Enter MAC Address Manually",
         "data": {
-          "mac_address": "MAC Address (e.g., AA:BB:CC:DD:EE:FF or AA-BB-CC-DD-EE-FF)"
+          "mac_address": "MAC Address (e.g., AA:BB:CC:DD:EE:FF)"
         }
       }
     },
     "error": {
-      "invalid_mac": "Invalid MAC address format. Please use XX:XX:XX:XX:XX:XX.",
-      "cannot_connect": "Unable to connect to the device. Ensure it's powered on and in range.",
+      "invalid_mac": "Invalid MAC address format. Use XX:XX:XX:XX:XX:XX.",
+      "cannot_connect": "Unable to connect. Ensure the display is powered on and in range.",
       "unknown": "An unknown error occurred.",
-      "no_devices_found": "No compatible devices found via Bluetooth. Try manual entry or check device power/range."
+      "no_devices_found": "No compatible devices found via Bluetooth. Try manual entry."
     },
     "abort": {
       "already_configured": "Device is already configured.",
-      "not_supported": "Device not supported by this integration (check name/advertisement)."
+      "not_supported": "Device not supported."
     }
   },
   "selector": {

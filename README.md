@@ -10,7 +10,7 @@ Control BLE e-ink displays (Electronic Shelf Labels) from Home Assistant or stan
 
 ## Home Assistant Integration
 
-A custom component that lets you send images to e-ink displays directly from Home Assistant via Bluetooth.
+A dumb pipe integration: receives an image via service call, converts it to the display protocol, and sends it over Bluetooth. No polling, no image comparison, no auto-update logic. Use HA Automations to decide when to push.
 
 ### Installation via HACS
 
@@ -25,16 +25,23 @@ A custom component that lets you send images to e-ink displays directly from Hom
 1. Copy `custom_components/aintinksmart/` into your Home Assistant `config/custom_components/` directory.
 2. Restart Home Assistant.
 
-### Features
+### Usage
 
-- **Camera entity** showing the last sent image.
-- **Status sensor** (idle / connecting / sending / success / error).
-- **Source entity select** — pick any `camera` or `image` entity to mirror.
-- **Update mode** — black & white or black, white & red.
-- **Auto-update switch** — automatically push when the source changes.
-- **Force update button** — manually trigger a send.
-- **Packet delay control** — tune BLE packet timing.
-- **Services** — `aintinksmart.send_image` and `aintinksmart.force_update` for automations.
+```yaml
+action: aintinksmart.send_image
+target:
+  device_id: 1234567890abcdef
+data:
+  image_path: "/media/dashboard.png"
+  mode: "bwr"
+```
+
+The service accepts one image source: `image_path` (file or URL), `image_data` (base64), or `image_entity_id` (HA entity).
+
+### Entities
+
+- **Status Sensor** — Shows idle / connecting / sending / success / error.
+- **Packet Delay Number** — BLE packet timing in ms (default: 20).
 
 For full documentation see [doc/home_assistant_integration.md](doc/home_assistant_integration.md).
 

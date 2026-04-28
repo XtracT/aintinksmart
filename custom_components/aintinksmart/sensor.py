@@ -17,8 +17,6 @@ from homeassistant.helpers.typing import StateType
 
 from .const import (
     DOMAIN,
-    STATE_IDLE,
-    STATE_ERROR,
     STATE_SENDING,
     STATE_SUCCESS,
     STATE_CONNECTING,
@@ -45,13 +43,7 @@ async def async_setup_entry(
 ) -> None:
     """Set up the sensor platform."""
     device_manager: AintinksmartDevice = hass.data[DOMAIN][entry.entry_id]
-
-    _LOGGER.debug("Setting up sensor for %s", device_manager.mac_address)
-
-    sensors = [
-        AintinksmartStatusSensor(device_manager),
-    ]
-    async_add_entities(sensors)
+    async_add_entities([AintinksmartStatusSensor(device_manager)])
 
 
 class AintinksmartStatusSensor(AintinksmartEntity, SensorEntity):
@@ -66,11 +58,13 @@ class AintinksmartStatusSensor(AintinksmartEntity, SensorEntity):
     @property
     def native_value(self) -> StateType:
         """Return the state of the sensor."""
-        return self._manager.state_data.get("status", STATE_UNAVAILABLE)
+        if not self._manager.is_available:
+            return STATE_UNAVAILABLE
+        return self._manager.status
 
     @property
     def icon(self) -> str:
-        """Return the icon to use in the frontend, based on the state."""
+        """Return the icon based on the state."""
         state = self.native_value
         if state == STATE_SENDING:
             return "mdi:sync"
@@ -78,7 +72,7 @@ class AintinksmartStatusSensor(AintinksmartEntity, SensorEntity):
             return "mdi:bluetooth-connect"
         if state == STATE_SUCCESS:
             return "mdi:check-circle-outline"
-        if state == STATE_ERROR:
+        if state and "error" in state:
             return "mdi:alert-circle-outline"
         if state == STATE_UNAVAILABLE:
             return "mdi:bluetooth-off"
@@ -88,11 +82,8 @@ class AintinksmartStatusSensor(AintinksmartEntity, SensorEntity):
     def extra_state_attributes(self) -> dict[str, Any] | None:
         """Return device specific state attributes."""
         attrs = {}
-        last_update = self._manager.state_data.get(ATTR_LAST_UPDATE)
-        last_error = self._manager.state_data.get(ATTR_LAST_ERROR)
-
-        if last_update and isinstance(last_update, datetime):
-            attrs[ATTR_LAST_UPDATE] = last_update.isoformat()
-        if last_error:
-            attrs[ATTR_LAST_ERROR] = last_error
-        return attrs
+        if self._manager.last_update:
+            attrs[ATTR_LAST_UPDATE] = self._manager.last_update.isoformat()
+        if self._manager.last_error:
+            attrs[ATTR_LAST_ERROR] = self._manager.last_error
+        return attrs or None

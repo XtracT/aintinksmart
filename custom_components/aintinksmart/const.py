@@ -1,16 +1,11 @@
 """Constants for the Ain't Ink Smart integration."""
 from typing import Final
 
-from homeassistant.const import Platform
-
 DOMAIN: Final = "aintinksmart"
 
 PLATFORMS: Final = [
-    Platform.SENSOR,
-    Platform.CAMERA,
-    Platform.BUTTON,
-    Platform.SELECT,
-    Platform.SWITCH,
+    "sensor",
+    "number",
 ]
 
 # Configuration keys
@@ -41,12 +36,10 @@ ATTR_LAST_ERROR: Final = "last_error"
 
 # Service Details
 SERVICE_SEND_IMAGE: Final = "send_image"
+ATTR_IMAGE_PATH: Final = "image_path"
 ATTR_IMAGE_DATA: Final = "image_data"
 ATTR_IMAGE_ENTITY_ID: Final = "image_entity_id"
 ATTR_MODE: Final = "mode"
 
 # BLE Details
 IMG_CHAR_UUID: Final = "00001525-1212-efde-1523-785feabcd123"
-
-# Entity Keys
-KEY_AUTO_UPDATE_SWITCH: Final = "auto_update_switch"

@@ -1,41 +1,35 @@
-# Existing send_image service
-force_update:
-  name: Force Update from Source
-  description: Force upload the configured source image entity to the display, regardless of whether it changed.
-  fields:
-    entity_id:
-      name: Target Device Entity ID
-      description: The entity ID of the Ain't Ink Smart device to update.
-      required: true
-      example: "camera.aint_ink_smart_display"
-# Describes the format for calling the services for the aintinksmart integration.
-
 send_image:
   name: Send Image
-  description: Sends an image to the Ain't Ink Smart e-ink display. Provide either image_data (base64) or image_entity_id.
+  description: Sends an image to the e-ink display via BLE. Provide one of: image_path, image_data, or image_entity_id.
   target:
     entity:
       integration: aintinksmart
-      # Can target specific domains if needed, e.g., sensor or camera
-      # domain: sensor
   fields:
+    image_path:
+      name: Image Path
+      description: "Local file path or URL to the image (e.g., /media/dashboard.png or https://example.com/image.png)"
+      example: "/media/dashboard.png"
+      selector:
+        text:
     image_data:
       name: Image Data (Base64)
-      description: Base64 encoded string of the image data. Mutually exclusive with Image Entity ID.
+      description: Base64 encoded image data. Mutually exclusive with image_path and image_entity_id.
       example: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
       selector:
         text:
           multiline: true
     image_entity_id:
       name: Image Entity ID
-      description: The entity_id of a Home Assistant 'image' entity to fetch the image from. Mutually exclusive with Image Data.
+      description: Entity ID of a camera or image entity to fetch the image from. Mutually exclusive with image_path and image_data.
       example: image.my_generated_picture
       selector:
         entity:
-          domain: image
+          domain:
+            - image
+            - camera
     mode:
       name: Color Mode
-      description: The color mode for image processing ('bw' for black/white, 'bwr' for black/white/red).
+      description: "Color mode for image processing: bw (black/white) or bwr (black/white/red)."
       required: true
       example: bwr
       selector:
