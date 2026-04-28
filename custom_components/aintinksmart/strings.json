@@ -3,11 +3,7 @@
     "step": {
       "user": {
         "title": "Set up Ain't Ink Smart Display",
-        "description": "Attempting discovery via Bluetooth and MQTT (using default topic). Choose an option below.",
-        "menu_options": {
-          "pick_device": "Choose a discovered device (waits ~{discovery_timeout}s)",
-          "manual_entry": "Enter device details manually"
-        },
+        "description": "Choose how to discover your display.",
         "data": {
           "selection": "Choose an option",
           "mac_address": "MAC Address"
@@ -15,7 +11,7 @@
       },
       "discover_devices": {
         "title": "Select Discovered Device",
-        "description": "Found {count} device(s) via {method} scan.",
+        "description": "Found {count} device(s) via Bluetooth scan.",
         "data": {
           "address": "Device"
         }
@@ -25,37 +21,13 @@
         "data": {
           "mac_address": "MAC Address (e.g., AA:BB:CC:DD:EE:FF or AA-BB-CC-DD-EE-FF)"
         }
-      },
-      "mqtt_discovery_setup": {
-        "title": "MQTT Gateway Discovery Setup",
-        "description": "Enter the base MQTT topic for your gateway.",
-        "data": {
-          "mqtt_base_topic": "MQTT Gateway Base Topic"
-        }
-      },
-      "mqtt_discovery_scan": {
-        "title": "Scanning via MQTT Gateway",
-        "description": "Initiating scan via MQTT gateway. Please wait for results...",
-        "data": {}
-      },
-      "configure_communication": {
-        "title": "Configure Communication",
-        "description": "Choose how Home Assistant should communicate with the display at {mac_address}.",
-        "data": {
-          "communication_mode": "Communication Mode",
-          "mqtt_base_topic": "MQTT Gateway Base Topic (only used if Mode is MQTT)"
-        }
       }
     },
     "error": {
       "invalid_mac": "Invalid MAC address format. Please use XX:XX:XX:XX:XX:XX.",
       "cannot_connect": "Unable to connect to the device. Ensure it's powered on and in range.",
       "unknown": "An unknown error occurred.",
-      "discovery_error": "An error occurred during device discovery.",
-      "mqtt_topic_required": "MQTT Base Topic is required when Communication Mode is set to MQTT Gateway.",
-      "no_devices_found": "No compatible devices found via Bluetooth or MQTT scan. Try manual entry or check device power/range and MQTT gateway status (if applicable).",
-      "mqtt_subscription_failed": "Failed to subscribe to MQTT topic: {topic}. Check MQTT configuration and broker connection.",
-      "mqtt_publish_failed": "Failed to publish MQTT message to topic: {topic}. Check MQTT configuration and broker connection."
+      "no_devices_found": "No compatible devices found via Bluetooth. Try manual entry or check device power/range."
     },
     "abort": {
       "already_configured": "Device is already configured.",
@@ -63,18 +35,11 @@
     }
   },
   "selector": {
-      "comm_mode_options": {
-        "options": {
-          "ble": "Direct BLE",
-          "mqtt": "MQTT Gateway"
-        }
-      },
-      "user_selection_options": {
-        "options": {
-          "ble_discover": "Scan using HA BLE",
-          "mqtt_discover": "Scan using MQTT gateway",
-          "manual": "Add MAC manually"
-        }
+    "user_selection_options": {
+      "options": {
+        "ble_discover": "Scan using Bluetooth",
+        "manual": "Add MAC manually"
       }
     }
+  }
 }

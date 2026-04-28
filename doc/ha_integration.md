@@ -9,7 +9,7 @@ This document explains how to install, configure, and use the Ain't Ink Smart cu
 1.  **Ensure HACS is installed.**
 2.  **Add Custom Repository:**
     *   Go to HACS > Integrations > Click the three dots in the top right > Custom Repositories.
-    *   Enter the URL of this GitHub repository (`<YOUR_REPOSITORY_URL>`).
+    *   Enter the URL of this GitHub repository.
     *   Select "Integration" as the category.
     *   Click "Add".
 3.  **Install Integration:**

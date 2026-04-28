@@ -11,8 +11,7 @@
     "pydantic>=1.9.0"
   ],
   "dependencies": [
-    "bluetooth",
-    "mqtt"
+    "bluetooth"
   ],
   "config_flow": true,
   "iot_class": "local_push",

@@ -4,7 +4,7 @@ This document provides comprehensive information on the Ain't Ink Smart custom c
 
 ## Intended Purpose
 
-The Ain't Ink Smart integration allows users to control and display images on compatible e-ink displays from within Home Assistant. It supports sending images via either Bluetooth Low Energy (BLE) or an MQTT gateway, providing flexibility depending on the user's setup and the display's capabilities.
+The Ain't Ink Smart integration allows users to control and display images on compatible e-ink displays from within Home Assistant via Bluetooth Low Energy (BLE).
 
 It provides entities to:
 - Display the last sent image (Camera).
@@ -12,6 +12,7 @@ It provides entities to:
 - Manually trigger an update from a configured source entity (Button).
 - Configure the delay between sending packets (Number).
 - Select the source image entity and the update mode (Select).
+- Enable or disable automatic updates (Switch).
 
 ## Installation
 
@@ -20,7 +21,7 @@ It provides entities to:
 1.  **Ensure HACS is installed.**
 2.  **Add Custom Repository:**
     *   Go to HACS > Integrations > Click the three dots in the top right > Custom Repositories.
-    *   Enter the URL of this GitHub repository (`<YOUR_REPOSITORY_URL>`).
+    *   Enter the URL of this GitHub repository.
     *   Select "Integration" as the category.
     *   Click "Add".
 3.  **Install Integration:**
@@ -40,8 +41,7 @@ It provides entities to:
 3.  **Device Discovery:**
     *   If your display is discovered via Bluetooth, select it from the list.
     *   If not discovered, choose "Enter MAC address manually" and provide the display's Bluetooth MAC address (e.g., `AA:BB:CC:DD:EE:FF`).
-4.  **Communication Mode:** Select the communication mode (Direct BLE or MQTT Gateway). If choosing MQTT, provide the base topic used by your MQTT gateway firmware.
-5.  **Setup Complete:** Complete the configuration flow. The integration will set up the device and its associated entities.
+4.  **Setup Complete:** The integration will set up the device and its associated entities.
 
 ## Entities
 
@@ -128,20 +128,21 @@ For each configured display, the integration creates the following entities:
 
 The integration follows the standard Home Assistant custom component structure, residing in the `custom_components/aintinksmart/` directory.
 
-- `__init__.py`: The entry point of the integration. It handles the setup and unloading of the integration, sets up the platforms (sensor, camera, button, select, number), and registers the custom services.
-- `const.py`: Defines constants used throughout the integration, including domain name, platform names, configuration keys, device states, communication modes, and service attributes.
-- `config_flow.py`: Manages the configuration flow for adding devices. It handles discovery (currently primarily BLE) and manual entry of device details, including MAC address and communication mode (BLE or MQTT).
-- `device.py`: Contains the core logic for managing a single Ain't Ink Smart device instance. It handles the communication (delegating to `ble_comms.py` or `mqtt_comms.py`), tracks the device's state, processes image data, formats the protocol payload, builds packets, and provides state data to the entities.
+- `__init__.py`: The entry point of the integration. It handles the setup and unloading of the integration, sets up the platforms (sensor, camera, button, select, switch, number), and registers the custom services.
+- `const.py`: Defines constants used throughout the integration, including domain name, platform names, configuration keys, device states, and service attributes.
+- `config_flow.py`: Manages the configuration flow for adding devices. It handles BLE discovery and manual entry of device MAC address.
+- `device.py`: Contains the core logic for managing a single Ain't Ink Smart device instance. It handles BLE communication (delegating to `ble_comms.py`), tracks the device's state, processes image data, formats the protocol payload, builds packets, and provides state data to the entities.
 - `ble_comms.py`: Provides functions for sending image packets to the e-ink display via BLE. It handles connecting to the BLE device and writing data to the appropriate characteristic.
-- `mqtt_comms.py`: Provides functions for sending image packets to the e-ink display via an MQTT gateway. It publishes packets to specific MQTT topics based on the configured base topic and device MAC address.
 - `helpers.py`: Contains helper classes and functions for image processing (converting images to bitplanes), protocol formatting (generating RLE or packed hex payloads), and packet building (calculating CRC and applying XOR encryption).
-- `manifest.json`: Standard Home Assistant manifest file, specifying the integration's domain, name, version, documentation links, code owners, required Python packages, and dependencies on other Home Assistant integrations (like `bluetooth` and `mqtt`).
+- `manifest.json`: Standard Home Assistant manifest file, specifying the integration's domain, name, version, required Python packages, and dependencies on other Home Assistant integrations (like `bluetooth`).
 - `services.yaml`: Defines the custom services exposed by the integration (`send_image` and `force_update`), including their names, descriptions, and input fields with validation schemas.
-- `strings.json`: Contains translatable strings used in the configuration flow and potentially other parts of the integration's UI.
-- `button.py`: Defines the `Force Update Display` button entity, which triggers the `force_update` service call using the currently selected source entity and update mode.
-- `camera.py`: Defines the `Display Image` camera entity, which displays the last image successfully sent to the device. It retrieves the image data from the `device.py` manager.
+- `strings.json`: Contains translatable strings used in the configuration flow and other parts of the integration's UI.
+- `button.py`: Defines the `Force Update Display` button entity.
+- `camera.py`: Defines the `Display Image` camera entity, which displays the last image successfully sent to the device.
 - `entity.py`: A base class for all entities within the `aintinksmart` domain. It provides common functionality like setting up unique IDs, device information, and handling state updates by registering listeners with the `device.py` manager.
-- `number.py`: Defines the `Packet Delay` number entity, allowing users to configure the delay in milliseconds between sending packets to the display. This can be useful for optimizing communication stability.
-- `select.py`: Defines two select entities: `Source Entity` (to choose which Home Assistant image or camera entity to use as the source for updates) and `Update Mode` (to select between 'bw' and 'bwr' color modes for updates).
+- `number.py`: Defines the `Packet Delay` number entity.
+- `select.py`: Defines two select entities: `Source Entity` and `Update Mode`.
+- `sensor.py`: Defines the `Status` sensor entity.
+- `switch.py`: Defines the `Enable Auto Update` switch entity.
 
 This structure allows for a clear separation of concerns, with `device.py` acting as the central hub for each display, managing its state and delegating communication and processing tasks to dedicated helper modules.
