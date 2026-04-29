@@ -27,14 +27,18 @@ A dumb pipe integration: receives an image via service call, converts it to the 
 
 ### Usage
 
+The service targets your display entity. Pick it from the UI dropdown or specify it in YAML:
+
 ```yaml
 action: aintinksmart.send_image
 target:
-  device_id: 1234567890abcdef
+  entity_id: sensor.my_display_status
 data:
   image_path: "/media/dashboard.png"
   mode: "bwr"
 ```
+
+`device_id` targeting also works for backward compatibility.
 
 The service accepts one image source: `image_path` (file or URL), `image_data` (base64), or `image_entity_id` (HA entity).
 

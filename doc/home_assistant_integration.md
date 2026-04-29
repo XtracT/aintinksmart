@@ -32,7 +32,37 @@ Each configured display creates:
 
 ## Service: `aintinksmart.send_image`
 
-The only service. Sends an image to the display. Provide **one** image source:
+The only service. Sends an image to the display.
+
+### Targeting
+
+Target your display by entity (preferred) or device ID:
+
+```yaml
+# Entity target — pick from the UI dropdown in Developer Tools
+action: aintinksmart.send_image
+target:
+  entity_id: sensor.my_display_status
+data:
+  image_path: "/media/dashboard.png"
+  mode: "bwr"
+```
+
+```yaml
+# Device target — also supported for backward compatibility
+action: aintinksmart.send_image
+target:
+  device_id: 1234567890abcdef
+data:
+  image_path: "/media/dashboard.png"
+  mode: "bwr"
+```
+
+In the Developer Tools UI, the target picker shows all entities from the integration automatically.
+
+### Fields
+
+Provide **one** image source:
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -44,12 +74,18 @@ The only service. Sends an image to the display. Provide **one** image source:
 ### Example (Automation)
 
 ```yaml
-action: aintinksmart.send_image
-target:
-  device_id: 1234567890abcdef
-data:
-  image_path: "/media/dashboard.png"
-  mode: "bwr"
+automation:
+  - alias: Update e-ink display
+    trigger:
+      - platform: state
+        entity_id: sensor.weather_temperature
+    action:
+      - action: aintinksmart.send_image
+        target:
+          entity_id: sensor.my_display_status
+        data:
+          image_path: "/media/dashboard.png"
+          mode: "bwr"
 ```
 
 The integration does not monitor entities or compare images. Use Home Assistant Automations to decide **when** to push an update.

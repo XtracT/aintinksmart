@@ -8,6 +8,7 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.service import async_extract_config_entry_ids
 
 from .const import (
@@ -56,7 +57,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         async def handle_send_image(call: ServiceCall) -> None:
             """Handle the send_image service call."""
-            config_entry_ids = await async_extract_config_entry_ids(call)
+            config_entry_ids = set(await async_extract_config_entry_ids(call))
+
+            # Also resolve from entity_id target (services.yaml entity picker)
+            entity_ids = call.data.get("entity_id")
+            if entity_ids:
+                if isinstance(entity_ids, str):
+                    entity_ids = [entity_ids]
+                ent_reg_local = er.async_get(hass)
+                for eid in entity_ids:
+                    entity_entry = ent_reg_local.async_get(eid)
+                    if entity_entry and entity_entry.config_entry_id in hass.data[DOMAIN]:
+                        config_entry_ids.add(entity_entry.config_entry_id)
+
             tasks = []
             for entry_id in config_entry_ids:
                 manager = hass.data[DOMAIN].get(entry_id)
