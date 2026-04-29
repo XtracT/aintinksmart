@@ -56,7 +56,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         async def handle_send_image(call: ServiceCall) -> None:
             """Handle the send_image service call."""
-            config_entry_ids = await async_extract_config_entry_ids(hass, call)
+            config_entry_ids = await async_extract_config_entry_ids(call)
             tasks = []
             for entry_id in config_entry_ids:
                 manager = hass.data[DOMAIN].get(entry_id)
