@@ -65,6 +65,9 @@ async def async_send_packets_ble(
 
         _LOGGER.debug("Found characteristic: %s", img_char.uuid)
 
+        # Give the device a moment to be ready after connection/service discovery
+        await asyncio.sleep(0.2)
+
         delay_sec = packet_delay_ms / 1000.0
 
         for i, packet in enumerate(packets):
@@ -81,6 +84,9 @@ async def async_send_packets_ble(
                 raise BleCommunicationError(f"Unexpected write error: {e}") from e
 
         _LOGGER.info("Successfully sent all %d packets to %s", len(packets), ble_device.address)
+        # Allow the BLE stack to flush any pending "write without response" packets
+        # before we disconnect, otherwise the last packet(s) may be dropped.
+        await asyncio.sleep(1.0)
         return True
 
     except BleCommunicationError:
